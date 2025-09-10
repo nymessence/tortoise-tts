@@ -1,5 +1,10 @@
 import torch
-from transformers import LogitsWarper
+
+try:
+    from transformers import LogitsWarper
+except ImportError:
+    from transformers.generation import LogitsProcessor
+    LogitsWarper = LogitsProcessor
 
 
 class TypicalLogitsWarper(LogitsWarper):
