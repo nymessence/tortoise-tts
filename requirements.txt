@@ -25,3 +25,4 @@ psutil
 sounddevice
 spacy>=3.7.5
 torch_xla
+libtpu
