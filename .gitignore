@@ -133,3 +133,6 @@ dmypy.json
 .custom/*
 results/*
 debug_states/*
+
+# local update script
+update_git.sh
