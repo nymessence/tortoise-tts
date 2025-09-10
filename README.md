@@ -22,7 +22,7 @@ pip install tortoise-tts
 If you would like to install the latest development version, you can also install it directly from the git repository:
 
 ```bash
-pip install git+https://github.com/neonbjb/tortoise-tts
+pip install git+https://github.com/nymessence/tortoise-tts
 ```
 
 ## What's in a name?
@@ -65,7 +65,7 @@ conda create --name tortoise python=3.9 numba inflect
 conda activate tortoise
 conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
 conda install transformers=4.29.2
-git clone https://github.com/neonbjb/tortoise-tts.git
+git clone https://github.com/nymessence/tortoise-tts.git
 cd tortoise-tts
 python setup.py install
 ```
