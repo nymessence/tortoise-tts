@@ -249,13 +249,13 @@ def build_hf_gpt_transformer(layers, model_dim, heads, max_mel_seq_len, max_text
     """
     from transformers import GPT2Config, GPT2Model
     gpt_config = GPT2Config(vocab_size=256,  # Unused.
-                             n_positions=max_mel_seq_len+max_text_seq_len,
-                             n_ctx=max_mel_seq_len+max_text_seq_len,
-                             n_embd=model_dim,
-                             n_layer=layers,
-                             n_head=heads,
-                             gradient_checkpointing=checkpointing,
-                             use_cache=not checkpointing)
+                            n_positions=max_mel_seq_len+max_text_seq_len,
+                            n_ctx=max_mel_seq_len+max_text_seq_len,
+                            n_embd=model_dim,
+                            n_layer=layers,
+                            n_head=heads,
+                            gradient_checkpointing=checkpointing,
+                            use_cache=not checkpointing)
     gpt = GPT2Model(gpt_config)
     # Override the built in positional embeddings
     del gpt.wpe
@@ -379,16 +379,16 @@ class UnifiedVoice(nn.Module):
         if use_deepspeed and half and torch.cuda.is_available():
             import deepspeed
             self.ds_engine = deepspeed.init_inference(model=self.inference_model,  
-                                                    mp_size=1,
-                                                    replace_with_kernel_inject=True,
-                                                    dtype=torch.float16)
+                                                     mp_size=1,
+                                                     replace_with_kernel_inject=True,
+                                                     dtype=torch.float16)
             self.inference_model = self.ds_engine.module.eval()
         elif use_deepspeed and torch.cuda.is_available():
             import deepspeed
             self.ds_engine = deepspeed.init_inference(model=self.inference_model,  
-                                                    mp_size=1,
-                                                    replace_with_kernel_inject=True,
-                                                    dtype=torch.float32)
+                                                     mp_size=1,
+                                                     replace_with_kernel_inject=True,
+                                                     dtype=torch.float32)
             self.inference_model = self.ds_engine.module.eval()
         else:
             self.inference_model = self.inference_model.eval()
@@ -533,7 +533,7 @@ class UnifiedVoice(nn.Module):
         gpt_inputs[:, -1] = self.start_mel_token
         return gpt_inputs
     def inference_speech(self, speech_conditioning_latent, text_inputs, input_tokens=None, num_return_sequences=1,
-                         max_generate_length=None, typical_sampling=False, typical_mass=.9, **hf_generate_kwargs):        
+                         max_generate_length=None, typical_sampling=False, typical_mass=.9, **hf_generate_kwargs):      
 
         text_inputs = F.pad(text_inputs, (0, 1), value=self.stop_text_token)
         text_inputs, _ = self.build_aligned_inputs_and_targets(text_inputs, self.start_text_token, self.stop_text_token)
@@ -543,10 +543,13 @@ class UnifiedVoice(nn.Module):
         emb = torch.cat([conds, text_emb], dim=1)
         self.inference_model.store_mel_emb(emb)
 
-        fake_inputs = torch.full((emb.shape[0], conds.shape[1] + emb.shape[1],), fill_value=1, dtype=torch.long,
+        # Fix: There was a bug here. `emb` is already `conds + text_emb`, so `conds.shape[1] + emb.shape[1]` is incorrect.
+        # It should be `emb.shape[1] + 1` to account for the start token.
+        fake_inputs = torch.full((emb.shape[0], emb.shape[1] + 1), fill_value=1, dtype=torch.long,
                                  device=text_inputs.device)
         fake_inputs[:, -1] = self.start_mel_token
         trunc_index = fake_inputs.shape[1]
+        
         if input_tokens is None:
             inputs = fake_inputs
         else:
@@ -554,12 +557,16 @@ class UnifiedVoice(nn.Module):
             fake_inputs = fake_inputs.repeat(num_return_sequences, 1)
             input_tokens = input_tokens.repeat(num_return_sequences // input_tokens.shape[0], 1)
             inputs = torch.cat([fake_inputs, input_tokens], dim=1)
+        
+        # This is the key fix to address the attention mask warning.
+        # We explicitly create a mask for the input sequence, with 1s for all valid tokens.
+        attention_mask = torch.ones_like(inputs, dtype=torch.long)
 
         logits_processor = LogitsProcessorList([TypicalLogitsWarper(mass=typical_mass)]) if typical_sampling else LogitsProcessorList()
         max_length = trunc_index + self.max_mel_tokens - 1  if max_generate_length is None else trunc_index + max_generate_length
         gen = self.inference_model.generate(inputs, bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token, eos_token_id=self.stop_mel_token,
-                                            max_length=max_length, logits_processor=logits_processor,
-                                            num_return_sequences=num_return_sequences, **hf_generate_kwargs)
+                                         max_length=max_length, logits_processor=logits_processor,
+                                         num_return_sequences=num_return_sequences, attention_mask=attention_mask, **hf_generate_kwargs)
         return gen[:, trunc_index:]
 
     def get_generator(self, fake_inputs, **hf_generate_kwargs):
@@ -580,3 +587,4 @@ if __name__ == '__main__':
             torch.randint(high=8192, size=(2,250)),
             torch.tensor([250*256,195*256]))
     gpt.text_forward(torch.randn(2,80,800), torch.randint(high=50, size=(2,80)), torch.tensor([32, 80]))
+
