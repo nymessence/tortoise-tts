@@ -28,4 +28,4 @@ torch_xla
 libtpu
 cloud-tpu-client==0.10
 torch>=1.13.0
-torchaudio
+
