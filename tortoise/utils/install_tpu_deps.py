@@ -30,18 +30,9 @@ def get_xla_wheel_url(torch_version, python_version, machine_arch):
     """
     Constructs the correct torch_xla wheel URL based on detected versions and architecture.
     """
-    # This is a lookup table for common PyTorch/XLA version combinations.
-    version_map = {
-        (1, 13): "1.13",
-        (2, 0): "2.0",
-        (2, 1): "2.1"
-    }
+    # Dynamically determine the XLA version based on the PyTorch version.
+    xla_version = f"{torch_version.major}.{torch_version.minor}"
     
-    # Correctly access the major and minor version numbers
-    xla_version = version_map.get((torch_version.major, torch_version.minor))
-    if not xla_version:
-        raise ValueError(f"No compatible torch_xla version found for PyTorch {torch_version}. Check the lookup table.")
-
     base_url = "https://storage.googleapis.com/tpu-pytorch/wheels"
     url = (
         f"{base_url}/torch_xla-{xla_version}-{python_version}-"

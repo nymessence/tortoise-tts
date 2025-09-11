@@ -13,6 +13,8 @@ def log(message):
 # Main test function.
 def run_tortoise_test():
     try:
+        api.prepare_tpu()
+    
         log("Starting Tortoise-TTS test...")
 
         # 1. Initialize the TextToSpeech model.
