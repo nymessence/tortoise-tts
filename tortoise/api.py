@@ -22,6 +22,8 @@ from tortoise.utils.audio import wav_to_univnet_mel, denormalize_tacotron_mel, T
 from tortoise.utils.diffusion import SpacedDiffusion, space_timesteps, get_named_beta_schedule
 from tortoise.utils.tokenizer import VoiceBpeTokenizer
 from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
+from tortoise.utils.install_tpu_deps import get_torch_version, get_python_version, get_machine_arch, get_xla_wheel_url
+
 from contextlib import contextmanager
 from huggingface_hub import hf_hub_download
 pbar = None
@@ -607,3 +609,30 @@ class TextToSpeech:
         # torch.use_deterministic_algorithms(True)
 
         return seed
+        
+def prepare_tpu():
+    """
+    Prepares the environment for TPU usage by installing the correct torch_xla wheel.
+    This function now automatically determines the correct wheel and installs it.
+    """
+    print("Preparing TPU environment...")
+    try:
+        # Get the correct URL for the wheel file
+        torch_version = get_torch_version()
+        if torch_version is None:
+            return
+
+        python_version = get_python_version()
+        machine_arch = get_machine_arch()
+        url = get_xla_wheel_url(torch_version, python_version, machine_arch)
+
+        # Use pip to install the wheel from the generated URL
+        print(f"Installing TPU dependencies from: {url}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "--no-deps", url])
+        print("TPU dependencies installed successfully.")
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error: pip failed to install the TPU dependencies. Command: {e.cmd}", file=sys.stderr)
+        print(f"Return code: {e.returncode}", file=sys.stderr)
+    except Exception as e:
+        print(f"An error occurred during TPU dependency preparation: {e}", file=sys.stderr)
