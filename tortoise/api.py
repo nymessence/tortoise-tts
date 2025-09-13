@@ -3,6 +3,7 @@ import random
 import uuid
 import subprocess
 import sys
+import psutil
 from time import time
 from urllib import request
 
@@ -24,7 +25,8 @@ from tortoise.utils.audio import wav_to_univnet_mel, denormalize_tacotron_mel, T
 from tortoise.utils.diffusion import SpacedDiffusion, space_timesteps, get_named_beta_schedule
 from tortoise.utils.tokenizer import VoiceBpeTokenizer
 from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
-from tortoise.utils.install_tpu_deps import get_torch_version, get_python_version, get_machine_arch, get_xla_wheel_url
+from tortoise.utils.install_tpu_deps import get_xla_wheel_url
+from tortoise.utils.device import get_device_name
 
 from contextlib import contextmanager
 from huggingface_hub import hf_hub_download
@@ -148,12 +150,22 @@ def classify_audio_clip(clip):
     results = F.softmax(classifier(clip), dim=-1)
     return results[0][0]
 
-
 def pick_best_batch_size_for_gpu():
     """
-    Tries to pick a batch size that will fit in your GPU. These sizes aren't guaranteed to work, but they should give
+    Tries to pick a batch size that will fit in your GPU/TPU. These sizes aren't guaranteed to work, but they should give
     you a good shot.
     """
+    # 🤖 TPU VERSION: Check for PyTorch/XLA and return a fixed, large batch size
+    try:
+        import torch_xla.core.xla_model as xm
+        if xm._get_xla_devices():
+            # TPUs benefit from larger batch sizes for efficiency due to their architecture.
+            # A common optimal batch size per core is 128.
+            return 128
+    except ImportError:
+        pass # Not a TPU environment
+    
+    # 💻 CUDA VERSION: Check for NVIDIA GPUs
     if torch.cuda.is_available():
         _, available = torch.cuda.mem_get_info()
         availableGb = available / (1024 ** 3)
@@ -163,8 +175,9 @@ def pick_best_batch_size_for_gpu():
             return 8
         elif availableGb > 7:
             return 4
+    
+    # 🍏 MPS VERSION: Check for Apple Silicon
     if torch.backends.mps.is_available():
-        import psutil
         available = psutil.virtual_memory().total
         availableGb = available / (1024 ** 3)
         if availableGb > 14:
@@ -173,6 +186,8 @@ def pick_best_batch_size_for_gpu():
             return 8
         elif availableGb > 7:
             return 4
+    
+    # 🖥️ Default to CPU
     return 1
 
 class TextToSpeech:
@@ -181,7 +196,7 @@ class TextToSpeech:
     """
 
     def __init__(self, autoregressive_batch_size=None, models_dir=MODELS_DIR, 
-                 enable_redaction=True, kv_cache=False, use_deepspeed=False, half=False, device=None,
+                 enable_redaction=True, kv_cache=False, use_deepspeed=True, half=False, device=None,
                  tokenizer_vocab_file=None, tokenizer_basic=False):
 
         """
@@ -252,12 +267,21 @@ class TextToSpeech:
         yield m
         m = model.cpu()
 
-    
     def load_cvvp(self):
         """Load CVVP model."""
         self.cvvp = CVVP(model_dim=512, transformer_heads=8, dropout=0, mel_codes=8192, conditioning_enc_depth=8, cond_mask_percentage=0,
                          speech_enc_depth=8, speech_mask_percentage=0, latent_multiplier=1).cpu().eval()
         self.cvvp.load_state_dict(torch.load(get_model_path('cvvp.pth', self.models_dir)))
+        
+    def to(self, device):
+        """
+        Moves all model components to the specified device.
+        """
+        self.autoregressive.to(device)
+        self.diffusion.to(device)
+        if self.vocoder is not None:
+            self.vocoder.to(device)
+        return self
 
     def get_conditioning_latents(self, voice_samples, return_mels=False):
         """
