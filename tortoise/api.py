@@ -158,7 +158,9 @@ def pick_best_batch_size_for_gpu():
     # 🤖 TPU VERSION: Check for PyTorch/XLA and return a fixed, large batch size
     try:
         import torch_xla.core.xla_model as xm
-        if xm._get_xla_devices():
+        # Use the public method `get_xla_supported_devices` to check for TPUs.
+        # This will return a list of device names, e.g., ['xla:0', 'xla:1', ...].
+        if xm.get_xla_supported_devices('TPU'):
             # TPUs benefit from larger batch sizes for efficiency due to their architecture.
             # A common optimal batch size per core is 128.
             return 128
