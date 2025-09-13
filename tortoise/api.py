@@ -180,7 +180,7 @@ def pick_best_batch_size_for_gpu():
     try:
         import torch_xla.core.xla_model as xm
         # Use the public method `get_xla_supported_devices` to check for TPUs.
-        if xm.get_xla_supported_devices('TPU'):
+        if len(xm.get_xla_supported_devices()) > 0:
             return 128
     except ImportError:
         pass # Not a TPU environment
