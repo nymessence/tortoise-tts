@@ -528,7 +528,7 @@ def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=
                 if cvvp_amount > 0:
                     if self.cvvp is None:
                         # Removed the call to self.load_cvvp()
-                    self.cvvp = self.cvvp.to(self.device)
+                        self.cvvp = self.cvvp.to(self.device)
                 if verbose:
                     if self.cvvp is None:
                         print("Computing best candidates using CLVP")
