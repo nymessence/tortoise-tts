@@ -1,3 +1,4 @@
+--extra-index-url https://storage.googleapis.com/tpu-pytorch/wheels/torch_xla
 tqdm>=4.31.0
 rotary_embedding_torch
 transformers>=4.31.0
@@ -28,4 +29,4 @@ cloud-tpu-client>=0.10
 torchvision>=0.15.2
 torch==2.8.0
 torch_xla==2.8.0
-libtpu==2.8.0 --extra-index-url https://storage.googleapis.com/tpu-pytorch/wheels/torch_xla
+libtpu==2.8.0

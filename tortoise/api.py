@@ -27,6 +27,7 @@ from tortoise.utils.tokenizer import VoiceBpeTokenizer
 from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
 from tortoise.utils.install_tpu_deps import get_xla_wheel_url
 from tortoise.utils.device import get_device_name
+from tortoise.utils.torch_version_check import find_working_versions
 
 from contextlib import contextmanager
 from huggingface_hub import hf_hub_download
@@ -683,4 +684,27 @@ def prepare_tpu():
         print(f"Return code: {e.returncode}", file=sys.stderr)
     except Exception as e:
         print(f"An error occurred during TPU dependency preparation: {e}", file=sys.stderr)
+        
+def run_tpu_version_check():
+    # First, install necessary libraries in the current environment
+    print("Installing necessary Python libraries for dynamic search...")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--quiet", "requests"],
+        check=True
+    )
+    print("✅ Libraries installed. Starting version search.")
+    
+    # Find working versions in a virtual environment
+    found_torch_ver, found_xla_ver = find_working_versions()
+    if found_torch_ver:
+        print("\n=== Final Report: First Working Combination Found ===")
+        print(f"✔️ torch=={found_torch_ver}, torch_xla=={found_xla_ver}")
+        print("\nRecommendation: Create a virtual environment and install the above versions.")
+        print(f"Example commands:")
+        print(f"python -m venv my_tpu_env")
+        print(f"source my_tpu_env/bin/activate  # On Unix/Mac")
+        print(f"my_tpu_env\\Scripts\\activate    # On Windows")
+        print(f"pip install torch=={found_torch_ver} torch_xla=={found_xla_ver} libtpu --extra-index-url https://storage.googleapis.com/tpu-pytorch/wheels/torch_xla")
+    else:
+        print("\nCould not find any working version combinations.")
 
