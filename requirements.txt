@@ -24,8 +24,8 @@ hjson
 psutil
 sounddevice
 spacy>=3.7.5
-torch_xla
-libtpu
 cloud-tpu-client>=0.10
-torch>=1.13.0
-
+torch>=2.0.0
+torchvision>=0.15.2
+torch_xla>=2.0.0
+libtpu
