@@ -644,18 +644,18 @@ class TextToSpeech:
             else:
                 return res
             
-def deterministic_state(self, seed=None):
-    """
-    Sets the random seeds that tortoise uses to the current time() and returns that seed so results can be
-    reproduced.
-    """
-    seed = int(time.time()) if seed is None else seed
-    torch.manual_seed(seed)
-    random.seed(seed)
-    # Can't currently set this because of CUBLAS. TODO: potentially enable it if necessary.
-    # torch.use_deterministic_algorithms(True)
+    def deterministic_state(self, seed=None):
+        """
+        Sets the random seeds that tortoise uses to the current time() and returns that seed so results can be
+        reproduced.
+        """
+        seed = int(time.time()) if seed is None else seed
+        torch.manual_seed(seed)
+        random.seed(seed)
+        # Can't currently set this because of CUBLAS. TODO: potentially enable it if necessary.
+        # torch.use_deterministic_algorithms(True)
 
-    return seed
+        return seed
         
 def prepare_tpu():
     """
