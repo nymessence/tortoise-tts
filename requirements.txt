@@ -29,4 +29,4 @@ cloud-tpu-client>=0.10
 torchvision>=0.15.2
 torch==2.8.0
 torch_xla==2.8.0
-libtpu==2.8.0
+libtpu
