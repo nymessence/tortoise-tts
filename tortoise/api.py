@@ -632,17 +632,17 @@ class TextToSpeech:
             return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
         return clip
     
-    wav_candidates = [potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
+        wav_candidates = [potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
 
-    if len(wav_candidates) > 1:
-        res = wav_candidates
-    else:
-        res = wav_candidates[0]
+        if len(wav_candidates) > 1:
+            res = wav_candidates
+        else:
+            res = wav_candidates[0]
 
-    if return_deterministic_state:
-        return res, (deterministic_seed, text, voice_samples, conditioning_latents)
-    else:
-        return res
+        if return_deterministic_state:
+            return res, (deterministic_seed, text, voice_samples, conditioning_latents)
+        else:
+            return res
         
     def deterministic_state(self, seed=None):
         """
