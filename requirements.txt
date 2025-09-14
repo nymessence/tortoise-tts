@@ -25,7 +25,7 @@ psutil
 sounddevice
 spacy>=3.7.5
 cloud-tpu-client>=0.10
-torch>=2.0.0
 torchvision>=0.15.2
-torch_xla>=2.0.0
-libtpu
+torch==2.8.0
+torch_xla==2.8.0
+libtpu==2.8.0 --extra-index-url https://storage.googleapis.com/tpu-pytorch/wheels/torch_xla
