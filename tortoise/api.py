@@ -436,6 +436,30 @@ class TextToSpeech:
         :return: Generated audio clip(s) as a torch tensor. Shape 1,S if k=1 else, (k,1,S) where S is the sample length.
                  Sample rate is 24kHz.
         """
+        if self.device == 'xla':
+            flags = {
+                'text': text,
+                'voice_samples': voice_samples,
+                'conditioning_latents': conditioning_latents,
+                'k': k,
+                'verbose': verbose,
+                'use_deterministic_seed': use_deterministic_seed,
+                'return_deterministic_state': return_deterministic_state,
+                'num_autoregressive_samples': num_autoregressive_samples,
+                'temperature': temperature,
+                'length_penalty': length_penalty,
+                'repetition_penalty': repetition_penalty,
+                'top_p': top_p,
+                'max_mel_tokens': max_mel_tokens,
+                'cvvp_amount': cvvp_amount,
+                'diffusion_iterations': diffusion_iterations,
+                'cond_free': cond_free,
+                'cond_free_k': cond_free_k,
+                'diffusion_temperature': diffusion_temperature,
+                'hf_generate_kwargs': hf_generate_kwargs
+            }
+            return self._tts_tpu_parallel(flags)
+
         deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
 
         text_tokens = torch.IntTensor(self.tokenizer.encode(text)).unsqueeze(0).to(self.device)
@@ -595,13 +619,13 @@ class TextToSpeech:
 
                         # Find the first occurrence of the "calm" token and trim the codes to that.
                         ctokens = 0
-                        for k in range(codes.shape[-1]):
-                            if codes[0, k] == calm_token:
+                        for k_idx in range(codes.shape[-1]):
+                            if codes[0, k_idx] == calm_token:
                                 ctokens += 1
                             else:
                                 ctokens = 0
                             if ctokens > 8:  # 8 tokens gives the diffusion model some "breathing room" to terminate speech.
-                                latents = latents[:, :k]
+                                latents = latents[:, :k_idx]
                                 break
                         mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
                                                      verbose=verbose)
@@ -616,13 +640,13 @@ class TextToSpeech:
 
                     # Find the first occurrence of the "calm" token and trim the codes to that.
                     ctokens = 0
-                    for k in range(codes.shape[-1]):
-                        if codes[0, k] == calm_token:
+                    for k_idx in range(codes.shape[-1]):
+                        if codes[0, k_idx] == calm_token:
                             ctokens += 1
                         else:
                             ctokens = 0
                         if ctokens > 8:  # 8 tokens gives the diffusion model some "breathing room" to terminate speech.
-                            latents = latents[:, :k]
+                            latents = latents[:, :k_idx]
                             break
                     mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
                                                  verbose=verbose)
