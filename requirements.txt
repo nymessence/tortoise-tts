@@ -1,3 +1,4 @@
+wheel
 tqdm>=4.31.0
 rotary_embedding_torch
 transformers>=4.31.0
@@ -25,6 +26,6 @@ sounddevice
 spacy>=3.7.5
 cloud-tpu-client>=0.10
 torchvision>=0.15.2
-torch==2.1.0
-torch_xla==2.1.0
+torch==2.2.0
+torch_xla==2.2.0
 libtpu==0.0.21
