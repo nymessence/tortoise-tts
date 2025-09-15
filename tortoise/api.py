@@ -400,7 +400,7 @@ class TextToSpeech:
         :param verbose: Whether or not to print log messages indicating the progress of creating a clip. Default=true.
         ~~AUTOREGRESSIVE KNOBS~~
         :param num_autoregressive_samples: Number of samples taken from the autoregressive model, all of which are filtered using CLVP.
-                                 As Tortoise is a probabilistic model, more samples means a higher probability of creating something "great".
+                                           As Tortoise is a probabilistic model, more samples means a higher probability of creating something "great".
         :param temperature: The softmax temperature of the autoregressive model.
         :param length_penalty: A length penalty applied to the autoregressive decoder. Higher settings causes the model to produce more terse outputs.
         :param repetition_penalty: A penalty that prevents the autoregressive decoder from repeating itself during decoding. Can be used to reduce the incidence
@@ -408,23 +408,23 @@ class TextToSpeech:
         :param top_p: P value used in nucleus sampling. (0,1]. Lower values mean the decoder produces more "likely" (aka boring) outputs.
         :param max_mel_tokens: Restricts the output length. (0,600] integer. Each unit is 1/20 of a second.
         :param typical_sampling: Turns typical sampling on or off. This sampling mode is discussed in this paper: https://arxiv.org/abs/2202.00666
-                                I was interested in the premise, but the results were not as good as I was hoping. This is off by default, but
-                                could use some tuning.
+                                 I was interested in the premise, but the results were not as good as I was hoping. This is off by default, but
+                                 could use some tuning.
         :param typical_mass: The typical_mass parameter from the typical_sampling algorithm.
         ~~CLVP-CVVP KNOBS~~
         :param cvvp_amount: Controls the influence of the CVVP model in selecting the best output from the autoregressive model.
-                            [0,1]. Values closer to 1 mean the CVVP model is more important, 0 disables the CVVP model.
+                             [0,1]. Values closer to 1 mean the CVVP model is more important, 0 disables the CVVP model.
         ~~DIFFUSION KNOBS~~
         :param diffusion_iterations: Number of diffusion steps to perform. [0,4000]. More steps means the network has more chances to iteratively refine
                                      the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better,
                                      however.
         :param cond_free: Whether or not to perform conditioning-free diffusion. Conditioning-free diffusion performs two forward passes for
-                          each diffusion step: one with the outputs of the autoregressive model and one with no conditioning priors. The output
-                          of the two is blended according to the cond_free_k value below. Conditioning-free diffusion is the real deal, and
-                          dramatically improves realism.
+                           each diffusion step: one with the outputs of the autoregressive model and one with no conditioning priors. The output
+                           of the two is blended according to the cond_free_k value below. Conditioning-free diffusion is the real deal, and
+                           dramatically improves realism.
         :param cond_free_k: Knob that determines how to balance the conditioning free signal with the conditioning-present signal. [0,inf].
-                            As cond_free_k increases, the output becomes dominated by the conditioning-free signal.
-                            Formula is: output=cond_present_output*(cond_free_k+1)-cond_absenct_output*cond_free_k
+                             As cond_free_k increases, the output becomes dominated by the conditioning-free signal.
+                             Formula is: output=cond_present_output*(cond_free_k+1)-cond_absenct_output*cond_free_k
         :param diffusion_temperature: Controls the variance of the noise fed into the diffusion model. [0,1]. Values at 0
                                      are the "mean" prediction of the diffusion network and will sound bland and smeared.
         ~~OTHER STUFF~~
@@ -463,14 +463,14 @@ class TextToSpeech:
                 ) as autoregressive, torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.half):
                     for b in tqdm(range(num_batches), disable=not verbose):
                         codes = autoregressive.inference_speech(auto_conditioning, text_tokens,
-                                                               do_sample=True,
-                                                               top_p=top_p,
-                                                               temperature=temperature,
-                                                               num_return_sequences=self.autoregressive_batch_size,
-                                                               length_penalty=length_penalty,
-                                                               repetition_penalty=repetition_penalty,
-                                                               max_generate_length=max_mel_tokens,
-                                                               **hf_generate_kwargs)
+                                                              do_sample=True,
+                                                              top_p=top_p,
+                                                              temperature=temperature,
+                                                              num_return_sequences=self.autoregressive_batch_size,
+                                                              length_penalty=length_penalty,
+                                                              repetition_penalty=repetition_penalty,
+                                                              max_generate_length=max_mel_tokens,
+                                                              **hf_generate_kwargs)
                         padding_needed = max_mel_tokens - codes.shape[1]
                         codes = F.pad(codes, (0, padding_needed), value=stop_mel_token)
                         samples.append(codes)
@@ -478,14 +478,14 @@ class TextToSpeech:
                 with self.temporary_cuda(self.autoregressive) as autoregressive:
                     for b in tqdm(range(num_batches), disable=not verbose):
                         codes = autoregressive.inference_speech(auto_conditioning, text_tokens,
-                                                               do_sample=True,
-                                                               top_p=top_p,
-                                                               temperature=temperature,
-                                                               num_return_sequences=self.autoregressive_batch_size,
-                                                               length_penalty=length_penalty,
-                                                               repetition_penalty=repetition_penalty,
-                                                               max_generate_length=max_mel_tokens,
-                                                               **hf_generate_kwargs)
+                                                              do_sample=True,
+                                                              top_p=top_p,
+                                                              temperature=temperature,
+                                                              num_return_sequences=self.autoregressive_batch_size,
+                                                              length_penalty=length_penalty,
+                                                              repetition_penalty=repetition_penalty,
+                                                              max_generate_length=max_mel_tokens,
+                                                              **hf_generate_kwargs)
                         padding_needed = max_mel_tokens - codes.shape[1]
                         codes = F.pad(codes, (0, padding_needed), value=stop_mel_token)
                         samples.append(codes)
@@ -553,7 +553,6 @@ class TextToSpeech:
                     samples = torch.cat(samples, dim=0)
                     best_results = samples[torch.topk(clip_results, k=k).indices]
             if self.cvvp is not None:
-                # self.cvvp = self.cvvp.cpu() # <-- REMOVE THIS LINE
                 pass
             del samples
 
@@ -567,18 +566,18 @@ class TextToSpeech:
                     device_type="cuda" if not torch.backends.mps.is_available() else 'mps', dtype=torch.float16, enabled=self.half
                 ):
                     best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                                  torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
-                                                  torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                  return_latent=True, clip_inputs=False)
+                                                 torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                 torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                 return_latent=True, clip_inputs=False)
                     del auto_conditioning
             else:
                 with self.temporary_cuda(
                     self.autoregressive
                 ) as autoregressive:
                     best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                                  torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
-                                                  torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                  return_latent=True, clip_inputs=False)
+                                                 torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                 torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                 return_latent=True, clip_inputs=False)
                     del auto_conditioning
 
             if verbose:
@@ -603,7 +602,7 @@ class TextToSpeech:
                                 latents = latents[:, :k]
                                 break
                         mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                       verbose=verbose)
+                                                     verbose=verbose)
                         wav = vocoder.inference(mel)
                         wav_candidates.append(wav.cpu())
             else:
@@ -624,16 +623,11 @@ class TextToSpeech:
                             latents = latents[:, :k]
                             break
                     mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                   verbose=verbose)
+                                                 verbose=verbose)
                     wav = vocoder.inference(mel)
                     wav_candidates.append(wav.cpu())
 
-    def potentially_redact(clip, text):
-        if self.enable_redaction:
-            return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
-        return clip
-    
-        wav_candidates = [potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
+        wav_candidates = [self.potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
 
         if len(wav_candidates) > 1:
             res = wav_candidates
@@ -644,7 +638,12 @@ class TextToSpeech:
             return res, (deterministic_seed, text, voice_samples, conditioning_latents)
         else:
             return res
-        
+    
+    def potentially_redact(self, clip, text):
+        if self.enable_redaction:
+            return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
+        return clip
+
     def deterministic_state(self, seed=None):
         """
         Sets the random seeds that tortoise uses to the current time() and returns that seed so results can be
