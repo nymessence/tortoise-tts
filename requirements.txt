@@ -24,6 +24,7 @@ sounddevice
 spacy>=3.7.5
 cloud-tpu-client>=0.10
 gdown
+pydub
 
 # Pinned versions for Kaggle TPU compatibility
 torch>=2.3.0
