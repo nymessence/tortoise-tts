@@ -28,6 +28,8 @@ from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
 from tortoise.utils.install_tpu_deps import get_xla_wheel_url
 from tortoise.utils.device import get_device_name
 from tortoise.utils.torch_version_check import find_working_versions
+from tortoise.utils.generate_tts_core import run_generation_for_spawn 
+
 
 from contextlib import contextmanager
 from huggingface_hub import hf_hub_download
@@ -656,6 +658,13 @@ class TextToSpeech:
         # torch.use_deterministic_algorithms(True)
 
         return seed
+        
+    def tts_xla_parallel(self, flags, num_processes=8):
+        """
+        Launches the TTS generation across all TPU cores using xmp.spawn.
+        """
+        print(f"Spawning {num_processes} processes for TPU utilization.")
+        xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=num_processes)
         
 def prepare_tpu():
     """
