@@ -1,12 +1,21 @@
 ## Changelog
+
+#### v3.1.0; 2025/09/15 
+- First new version on nymessence fork
+- Added fixes for dependency conflicts
+- Added TPU support 
+
 #### v3.0.0; 2023/10/18
 - Added fast inference for tortoise with HiFi Decoder (inspired by xtts by [coquiTTS](https://github.com/coqui-ai/TTS) 🐸, check out their multilingual model for noncommercial uses)
+
 #### v2.8.0; 2023/9/13
 - Added custom tokenizer for non-english models
+
 #### v2.7.0; 2023/7/26
 - Bug fixes
 - Added Apple Silicon Support
 - Updated Transformer version
+
 #### v2.6.0; 2023/7/26
 - Bug fixes
 
