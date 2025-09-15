@@ -1,3 +1,4 @@
+# Base requirements from the fork
 tqdm>=4.31.0
 rotary_embedding_torch
 transformers>=4.31.0
@@ -10,7 +11,6 @@ scipy
 librosa>=0.9.1
 numpy<2
 numba
-torchaudio
 threadpoolctl
 llvmlite
 appdirs
@@ -23,8 +23,13 @@ psutil
 sounddevice
 spacy>=3.7.5
 cloud-tpu-client>=0.10
-torchvision>=0.15.2
-torch==2.1.0
-torch_xla==2.1.0
-libtpu==0.0.21
-deepspeed==0.11.0
+gdown
+
+# Pinned versions for Kaggle TPU compatibility
+torch>=2.3.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+torch_xla[tpu]>=2.3.0
+
+# DeepSpeed, requires separate installation
+deepspeed>=0.11.0
