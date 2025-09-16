@@ -1,63 +1,89 @@
-import os
-import sys
 import logging
-import torch
-import torch_xla.distributed.xla_multiprocessing as xmp
+import numpy as np
+from pydub import AudioSegment
+from scipy.io.wavfile import write
+import re 
 
-# Import the core functions
-from tortoise.api import run_generation_tpu, run_generation_local
-from tortoise.utils.generate_tts_core import preprocess_script, stitch_audio
-# Import from the new file
-from tortoise.binaural import add_binaural_beats, add_hemi_sync, BINAURAL_BEATS 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(process)d] %(message)s')
 
-def main():
-    # Define and centralize all file paths here
-    OUTPUT_BASE_DIR = "/kaggle/working"
-    OUT_DIR = os.path.join(OUTPUT_BASE_DIR, "speech")
-    SCRIPT_PATH = os.path.join(OUTPUT_BASE_DIR, "story_script.txt")
-    PREPROCESSED_SCRIPT_PATH = os.path.join(OUTPUT_BASE_DIR, "story_script_preprocessed.txt")
-    TTS_DIR = "/tmp/tortoise-tts"
-    
-    LINES_DIR = os.path.join(OUT_DIR, "lines")
-    STORY_AUDIO_PATH = os.path.join(OUT_DIR, "story.wav")
-    HEMISYNC_PATH = os.path.join(OUT_DIR, "story_with_beats.wav")
-    
-    preprocess_script(SCRIPT_PATH, PREPROCESSED_SCRIPT_PATH)
-    
-    with open(PREPROCESSED_SCRIPT_PATH, 'r', encoding='utf-8') as f:
-        total_lines = len([line.strip() for line in f if line.strip()])
-    
-    flags = {
-        'lines_file': PREPROCESSED_SCRIPT_PATH,
-        'output_dir': LINES_DIR, 
-        'hardware': 'tpu',
-        'voice': "nya",
-        'preset': "fast",
-        'models_dir': TTS_DIR
-    }
+# Dictionary of common binaural beat frequencies
+BINAURAL_BEATS = {
+    'delta': 2,    # Deep sleep, healing
+    'theta': 6,    # Meditation, intuition, deep relaxation
+    'alpha': 10,   # Relaxed, focused, calm
+    'beta': 18,    # Alert, active, concentration
+    'gamma': 40    # High-level cognitive processing, insight
+}
 
-    if 'TPU_PROCESSES_COUNT' in os.environ and 'TPU_NAME' in os.environ:
-        try:
-            logging.info("✅ TPU detected. Starting generation with new API.")
-            run_generation_tpu(flags)
-        except Exception as e:
-            logging.warning(f"⚠️ TPU multiprocessing failed ({e}). Falling back to single-process generation.")
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            flags['hardware'] = device
-            run_generation_local(flags)
-    else:
-        logging.info("⚠️ TPU not detected. Falling back to single-process generation.")
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        flags['hardware'] = device
-        run_generation_local(flags)
-
-    stitch_audio(LINES_DIR, total_lines, STORY_AUDIO_PATH)
+def _generate_binaural_beats_audio(duration_s, sample_rate, base_freq, beat_freq):
+    """
+    Helper function to generate a single binaural beat AudioSegment.
+    """
+    t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
+    left = np.sin(2 * np.pi * base_freq * t)
+    right = np.sin(2 * np.pi * (base_freq + beat_freq) * t)
+    stereo = np.vstack((left, right)).T
+    stereo = stereo / np.max(np.abs(stereo))
+    stereo_int16 = (stereo * 32767).astype(np.int16)
     
-    # Use the new, dedicated Hemi-Sync function
-    # You can customize the layered frequencies here if you want
-    add_hemi_sync(STORY_AUDIO_PATH, HEMISYNC_PATH, beat_freqs=[BINAURAL_BEATS['theta'], BINAURAL_BEATS['alpha']])
-    
-    logging.info("✅ All processing complete. Final files are in the 'speech' directory.")
+    return AudioSegment(
+        stereo_int16.tobytes(), 
+        frame_rate=sample_rate, 
+        sample_width=stereo_int16.dtype.itemsize, 
+        channels=2
+    )
 
-if __name__ == "__main__":
-    main()
+def add_binaural_beats(story_path, beats_path, mixed_output_path, base_freq=200, beat_freq=7):
+    """
+    Generates single-frequency binaural beats and mixes them with the story audio.
+    """
+    try:
+        story = AudioSegment.from_wav(story_path)
+        hemisync = _generate_binaural_beats_audio(story.duration_seconds, 44100, base_freq, beat_freq)
+        
+        hemisync = hemisync[:len(story)]
+        
+        mixed = story.overlay(hemisync - 8)
+        mixed.export(mixed_output_path, format="wav")
+        logging.info(f"✅ Binaural beats (base: {base_freq}Hz, beat: {beat_freq}Hz) mixed: {mixed_output_path}")
+    except Exception as e:
+        logging.error(f"❌ Failed to add binaural beats: {e}", exc_info=True)
+        raise
+
+def add_hemi_sync(story_path, mixed_output_path, beat_freqs=[6, 10], base_freq=200):
+    """
+    Simulates Hemi-Sync by layering multiple binaural beat frequencies with a single base frequency.
+    """
+    try:
+        story = AudioSegment.from_wav(story_path)
+        sample_rate = 44100
+
+        combined_beats = AudioSegment.silent(duration=len(story), frame_rate=sample_rate)
+        for beat_freq in beat_freqs:
+            beat_track = _generate_binaural_beats_audio(story.duration_seconds, sample_rate, base_freq, beat_freq)
+            combined_beats = combined_beats.overlay(beat_track, gain_during_overlay=-6)
+            logging.info(f"-> Layered a beat frequency of {beat_freq}Hz.")
+        
+        mixed = story.overlay(combined_beats - 8)
+        mixed.export(mixed_output_path, format="wav")
+        logging.info(f"✅ Hemi-Sync audio created with layered frequencies: {beat_freqs} and base frequency: {base_freq}Hz")
+
+    except Exception as e:
+        logging.error(f"❌ Failed to create Hemi-Sync audio: {e}", exc_info=True)
+        raise
+
+def parse_beat_token(token_string):
+    """
+    Parses a beat token of the format: [BEAT: carrier; beat1, beat2, ...].
+    Returns the carrier frequency (int) and a list of beat frequencies (list of ints).
+    """
+    pattern = r'\[BEAT:\s*(\d+)\s*;\s*([\d,\s]+)\s*]'
+    match = re.search(pattern, token_string)
+
+    if not match:
+        raise ValueError(f"Invalid BEAT token format: {token_string}")
+
+    carrier_freq = int(match.group(1))
+    beat_freqs = [int(f.strip()) for f in match.group(2).split(',')]
+
+    return carrier_freq, beat_freqs
