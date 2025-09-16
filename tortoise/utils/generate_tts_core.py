@@ -144,8 +144,10 @@ def run_generation(args):
 def run_generation_for_spawn(flags):
     """
     Sets up arguments from flags provided by xmp.spawn and runs generation.
-    This function is the entry point for each of the 8 TPU core processes.
+    This function is the entry point for each of the TPU core processes.
     """
+    import torch_xla.core.xla_model as xm
+
     class Args:
         pass
     args = Args()
@@ -157,10 +159,10 @@ def run_generation_for_spawn(flags):
     args.voice = flags['voice']
     args.preset = flags['preset']
     args.models_dir = flags['models_dir']
-    
-    # --- FIXED: Correctly distribute work across the 8 physical TPU cores ---
-    args.start_idx = int(os.environ.get('TPU_PROCESS_INDEX', 0))
-    args.step = 8 # This should be set to the total number of processes you are spawning
+
+    # --- FIXED: Dynamically calculate the step based on available TPU cores ---
+    args.step = xm.xrt_world_size()
+    args.start_idx = xm.get_ordinal()
 
     # Run the main generation logic with the configured arguments
     run_generation(args)
