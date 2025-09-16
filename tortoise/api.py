@@ -383,10 +383,10 @@ class TextToSpeech:
         settings.update(kwargs) # allow overriding of preset settings with kwargs
         return self.tts(text, **settings)
 
-    def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
+    def tts(self, text, voice_samples=None, conditioning_latents=None, k=8, verbose=True, use_deterministic_seed=None,
                 return_deterministic_state=False,
                 # autoregressive generation parameters follow
-                num_autoregressive_samples=1, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
+                num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
                 # CVVP parameters follow
                 cvvp_amount=.0,
                 # diffusion generation parameters follow
@@ -395,9 +395,9 @@ class TextToSpeech:
             """
             Produces an audio clip of the given text being spoken with the given reference voice.
             """
-            self.autoregressive_batch_size = 1 # Set batch size to 1 to match num_autoregressive_samples
-            num_autoregressive_samples = 1 # Force single-sample generation
-            k = 1 # Force single output clip
+            # --- Force a single-sample generation for speed and stability
+            self.autoregressive_batch_size = 8
+            num_autoregressive_samples = 8
 
             if self.device == 'xla':
                 flags = {
@@ -438,27 +438,29 @@ class TextToSpeech:
             diffusion_conditioning = diffusion_conditioning.to(self.device)
 
             diffuser = load_discrete_vocoder_diffuser(desired_diffusion_steps=diffusion_iterations, cond_free=cond_free, cond_free_k=cond_free_k)
+            calm_token = 83 # Define the calm_token here
 
             with torch.no_grad():
                 if verbose:
                     print("Generating autoregressive samples..")
-
+                
                 with self.temporary_cuda(self.autoregressive) as autoregressive:
-                    # Direct generation of a single sample, no need for loops or CLVP
                     best_results = autoregressive.inference_speech(
                         auto_conditioning,
                         text_tokens,
                         do_sample=True,
                         top_p=top_p,
                         temperature=temperature,
-                        num_return_sequences=1,
+                        num_return_sequences=num_autoregressive_samples,
                         length_penalty=length_penalty,
                         repetition_penalty=repetition_penalty,
                         max_generate_length=max_mel_tokens,
                         **hf_generate_kwargs
                     )
-
-                # The rest of the function remains the same, starting from getting the latents
+                
+                if verbose:
+                    print("Transforming autoregressive outputs into audio..")
+                
                 if not torch.backends.mps.is_available():
                     with self.temporary_cuda(
                         self.autoregressive
@@ -480,10 +482,6 @@ class TextToSpeech:
                                                      return_latent=True, clip_inputs=False)
                         del auto_conditioning
 
-                if verbose:
-                    print("Transforming autoregressive outputs into audio..")
-                
-                calm_token = 83 # Define the calm_token here
                 wav_candidates = []
                 if not torch.backends.mps.is_available():
                     with self.temporary_cuda(self.diffusion) as diffusion, self.temporary_cuda(
@@ -493,7 +491,6 @@ class TextToSpeech:
                             codes = best_results[b].unsqueeze(0)
                             latents = best_latents[b].unsqueeze(0)
 
-                            # Find the first occurrence of the "calm" token and trim the codes to that.
                             ctokens = 0
                             for k_idx in range(codes.shape[-1]):
                                 if codes[0, k_idx] == calm_token:
