@@ -22,7 +22,9 @@ xmp = None
 # ========================
 
 def run_generation(args):
-    # ... (rest of the run_generation function, no changes needed here)
+    """
+    Main generation logic for a single process.
+    """
     global xm
     try:
         from tortoise.api import TextToSpeech
@@ -158,15 +160,19 @@ def preprocess_script(script_path, preprocessed_script_path, instructions_path=N
         sys.exit(1)
 
 def stitch_audio(lines_dir, num_lines, output_path):
-    # ... (rest of the stitch_audio function, no changes needed here)
+    """
+    Stitches generated audio segments together, with a 1-second gap between lines.
+    """
     try:
         all_audio = []
+        GAP_DURATION_MS = 1000  # 1 second gap
+        silent_gap = AudioSegment.silent(duration=GAP_DURATION_MS)
+
         for i in range(num_lines):
             line_file = os.path.join(lines_dir, f"{str(i).zfill(4)}.wav")
             if not os.path.exists(line_file):
                 logging.warning(f"Audio file not found for line {i}. Adding silence.")
-                silent = AudioSegment.silent(duration=1000)
-                all_audio.append(silent)
+                all_audio.append(AudioSegment.silent(duration=1000))
             else:
                 all_audio.append(AudioSegment.from_wav(line_file))
         
@@ -174,7 +180,9 @@ def stitch_audio(lines_dir, num_lines, output_path):
             raise RuntimeError("No audio lines loaded for stitching!")
         
         final_audio = all_audio[0]
+        # Append silence and then the next audio clip for each subsequent line
         for audio in all_audio[1:]:
+            final_audio = final_audio.append(silent_gap, crossfade=0)
             final_audio = final_audio.append(audio, crossfade=150)
         
         final_audio.export(output_path, format="wav")
@@ -184,7 +192,9 @@ def stitch_audio(lines_dir, num_lines, output_path):
         raise
 
 def run_generation_local(flags):
-    # ... (rest of the run_generation_local function, no changes needed here)
+    """
+    Local generation function for GPU/CPU fallback.
+    """
     class Args:
         pass
     args = Args()
@@ -199,7 +209,9 @@ def run_generation_local(flags):
     run_generation(args)
 
 def run_generation_for_spawn(index, flags):
-    # ... (rest of the run_generation_for_spawn function, no changes needed here)
+    """
+    Sets up arguments from flags provided by xmp.spawn and runs generation.
+    """
     import torch_xla.core.xla_model as xla_model
     import torch_xla.distributed.xla_multiprocessing as xla_multiprocessing
     global xm
