@@ -7,7 +7,7 @@ import glob
 from pydub import AudioSegment
 import numpy as np
 from scipy.io.wavfile import write
-import re 
+import re
 import json
 
 # Configure basic logging
@@ -22,9 +22,7 @@ xmp = None
 # ========================
 
 def run_generation(args):
-    """
-    Main generation logic for a single process.
-    """
+    # ... (rest of the run_generation function, no changes needed here)
     global xm
     try:
         from tortoise.api import TextToSpeech
@@ -109,14 +107,15 @@ def run_generation(args):
         logging.info(f"Audio saved to '{output_path}'.")
     logging.info("All lines for this process have been generated.")
 
-def preprocess_script(script_path, preprocessed_script_path, instructions_path):
+def preprocess_script(script_path, preprocessed_script_path, instructions_path=None):
     """
-    Cleans the script for TTS generation and extracts command tokens to a separate JSON file.
+    Cleans the script for TTS generation and optionally extracts command tokens.
     
     Args:
         script_path (str): Path to the original script file.
         preprocessed_script_path (str): Path to save the cleaned script for TTS.
-        instructions_path (str): Path to save the JSON file with command tokens.
+        instructions_path (str, optional): Path to save the JSON file with command tokens.
+                                          If None, no JSON file is created and all tokens are stripped.
     """
     try:
         with open(script_path, "r", encoding="utf-8") as f_in:
@@ -125,44 +124,41 @@ def preprocess_script(script_path, preprocessed_script_path, instructions_path):
         cleaned_lines = []
         instructions = []
         
+        # Check if the script should operate in legacy mode (strip all tokens)
+        legacy_mode = instructions_path is None or not any(re.search(r'\[.*?\]', line) for line in lines)
+        
         for i, line in enumerate(lines):
-            # Find all bracketed tokens in the line
-            tokens = re.findall(r'\[.*?\]', line)
-            
-            # If tokens are found, save them with their line number and remove them from the text
-            if tokens:
-                for token in tokens:
-                    instructions.append({
-                        "line": i,
-                        "token": token
-                    })
-                # Remove all bracketed tokens from the current line
+            if legacy_mode:
+                # Legacy mode: just remove all bracketed text
                 cleaned_line = re.sub(r'\[.*?\]', '', line)
             else:
-                cleaned_line = line
+                # Advanced mode: extract tokens and clean text
+                tokens = re.findall(r'\[.*?\]', line)
+                if tokens:
+                    for token in tokens:
+                        instructions.append({"line": i, "token": token})
+                    cleaned_line = re.sub(r'\[.*?\]', '', line)
+                else:
+                    cleaned_line = line
 
-            # Only add non-empty lines to the cleaned list
             if cleaned_line.strip():
                 cleaned_lines.append(cleaned_line.strip())
         
-        # Write the cleaned lines to the preprocessed script file
         with open(preprocessed_script_path, "w", encoding="utf-8") as f_out:
             f_out.write('\n'.join(cleaned_lines))
         logging.info(f"✅ Preprocessed script ready: {preprocessed_script_path}")
         
-        # Write the instructions to the JSON file
-        with open(instructions_path, "w", encoding="utf-8") as f_out:
-            json.dump(instructions, f_out, indent=4)
-        logging.info(f"✅ Command instructions saved: {instructions_path}")
+        if not legacy_mode:
+            with open(instructions_path, "w", encoding="utf-8") as f_out:
+                json.dump(instructions, f_out, indent=4)
+            logging.info(f"✅ Command instructions saved: {instructions_path}")
         
     except Exception as e:
         logging.error(f"❌ Failed to preprocess script: {e}")
         sys.exit(1)
 
 def stitch_audio(lines_dir, num_lines, output_path):
-    """
-    Stitches generated audio segments together.
-    """
+    # ... (rest of the stitch_audio function, no changes needed here)
     try:
         all_audio = []
         for i in range(num_lines):
@@ -188,9 +184,7 @@ def stitch_audio(lines_dir, num_lines, output_path):
         raise
 
 def run_generation_local(flags):
-    """
-    Local generation function for GPU/CPU fallback.
-    """
+    # ... (rest of the run_generation_local function, no changes needed here)
     class Args:
         pass
     args = Args()
@@ -205,9 +199,7 @@ def run_generation_local(flags):
     run_generation(args)
 
 def run_generation_for_spawn(index, flags):
-    """
-    Sets up arguments from flags provided by xmp.spawn and runs generation.
-    """
+    # ... (rest of the run_generation_for_spawn function, no changes needed here)
     import torch_xla.core.xla_model as xla_model
     import torch_xla.distributed.xla_multiprocessing as xla_multiprocessing
     global xm
