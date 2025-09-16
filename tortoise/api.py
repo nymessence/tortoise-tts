@@ -383,15 +383,15 @@ class TextToSpeech:
         settings.update(kwargs) # allow overriding of preset settings with kwargs
         return self.tts(text, **settings)
 
-    def tts(self, text, voice_samples=None, conditioning_latents=None, k=8, verbose=True, use_deterministic_seed=None,
-                return_deterministic_state=False,
-                # autoregressive generation parameters follow
-                num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
-                # CVVP parameters follow
-                cvvp_amount=.0,
-                # diffusion generation parameters follow
-                diffusion_iterations=16, cond_free=False, cond_free_k=2, diffusion_temperature=1.0,
-                **hf_generate_kwargs):
+    def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
+            return_deterministic_state=False,
+            # autoregressive generation parameters follow
+            num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
+            # CVVP parameters follow
+            cvvp_amount=.0,
+            # diffusion generation parameters follow
+            diffusion_iterations=16, cond_free=False, cond_free_k=2, diffusion_temperature=1.0,
+            **hf_generate_kwargs):
             """
             Produces an audio clip of the given text being spoken with the given reference voice.
             """
