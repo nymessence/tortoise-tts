@@ -739,4 +739,26 @@ def run_tpu_version_check():
         print(f"pip install torch=={found_torch_ver} torch_xla=={found_xla_ver} libtpu --extra-index-url https://storage.googleapis.com/tpu-pytorch/wheels/torch_xla")
     else:
         print("\nCould not find any working version combinations.")
+        
+def run_generation_tpu(flags):
+    import torch_xla.distributed.xla_multiprocessing as xmp
+    xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=None, start_method='fork')
+
+def run_generation_local(flags):
+    # This is a simple wrapper for local/CPU/GPU generation
+    class Args:
+        pass
+    args = Args()
+    args.lines_file = flags['lines_file']
+    args.output_dir = flags['output_dir']
+    args.hardware = flags['hardware']
+    args.voice = flags['voice']
+    args.preset = flags['preset']
+    args.models_dir = flags['models_dir']
+    args.start_idx = 0
+    args.step = 1
+    # Run the core generation function with the local arguments
+    from tortoise.utils.generate_tts_core import run_generation
+    run_generation(args)
+
 
