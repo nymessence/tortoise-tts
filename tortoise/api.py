@@ -759,24 +759,43 @@ def run_tpu_version_check():
         print("\nCould not find any working version combinations.")
         
 def run_generation_tpu(flags):
+    """
+    Spawns multiple processes for TPU-based generation using xla_multiprocessing.
+    """
     import torch_xla.distributed.xla_multiprocessing as xmp
-    xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=None, start_method='fork')
-
+    # The number of processes (nprocs) should be explicitly set to 8 for a v3-8 TPU
+    # This is crucial for distributing the work across all TPU cores.
+    xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=8, start_method='fork')
+        
 def run_generation_local(flags):
-    # This is a simple wrapper for local/CPU/GPU generation
+    """
+    Wrapper for single-process generation on a CPU or GPU.
+    """
+    # Dynamically import run_generation to avoid circular dependencies
+    from tortoise.utils.generate_tts_core import run_generation
+    
     class Args:
+        """A simple object to pass arguments to the run_generation function."""
         pass
+        
     args = Args()
-    args.lines_file = flags['lines_file']
-    args.output_dir = flags['output_dir']
-    args.hardware = flags['hardware']
-    args.voice = flags['voice']
-    args.preset = flags['preset']
-    args.models_dir = flags['models_dir']
+    # Required parameters for run_generation
+    args.lines_file = flags.get('lines_file')
+    args.output_dir = flags.get('output_dir')
+    args.hardware = flags.get('hardware')
+    args.voice = flags.get('voice')
+    args.preset = flags.get('preset')
+    args.models_dir = flags.get('models_dir')
     args.start_idx = 0
     args.step = 1
-    # Run the core generation function with the local arguments
-    from tortoise.utils.generate_tts_core import run_generation
+    
+    # Optional parameters that are critical for proper execution
+    args.k = flags.get('k', 1)  # Defaulting to a safe value
+    args.use_deepspeed = flags.get('use_deepspeed', False)
+    args.half = flags.get('half', False)
+    args.verbose = flags.get('verbose', False)
+    
+    # Run the core generation function with the complete argument set
     run_generation(args)
 
 
