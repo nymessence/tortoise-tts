@@ -264,9 +264,25 @@ def run_generation_local(flags):
     logging.info(f"✅ Local generation finished.")
     
 def run_generation_chunked(args):
+    """
+    Loads model once, then generates all lines in [args.start_idx, args.end_idx) in micro-batches.
+    Maximizes TPU utilization by keeping model resident and processing sequentially.
+    """
+    import torch
+    import os
+    import logging
 
-
-    device = xm.xla_device()
+    # ✅ HARDWARE-AWARE DEVICE SELECTION — CRITICAL FIX
+    if args.hardware == 'tpu':
+        import torch_xla.core.xla_model as xm
+        device = xm.xla_device()
+        logging.info(f"[Core {args.rank}] Using TPU device: {device}")
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+        logging.info(f"[Core {args.rank}] Using GPU device: {device}")
+    else:
+        device = torch.device('cpu')
+        logging.info(f"[Core {args.rank}] Using CPU device")
 
     logging.info(f"[Core {args.rank}] Loading TTS model...")
     from tortoise.api import TextToSpeech
@@ -322,13 +338,52 @@ def run_generation_chunked(args):
                 logging.warning(f"[Core {args.rank}] Invalid audio for line {line_idx+1}. Using silent fallback.")
                 audio = silent_fallback
 
-            torchaudio.save(output_path, audio.cpu(), sample_rate=sample_rate)
+            # ✅ FUTURE-PROOF AUDIO SAVING — Uses torchcodec.encoders.AudioEncoder
+            save_audio_fallback(output_path, audio, sample_rate)
             logging.info(f"[Core {args.rank}] ✅ Saved: {output_path}")
 
         except Exception as e:
             logging.error(f"[Core {args.rank}] ❌ Failed to save line {line_idx+1}: {e}")
-            torchaudio.save(output_path, silent_fallback, sample_rate=sample_rate)
+            save_audio_fallback(output_path, silent_fallback, sample_rate)
 
+    logging.info(f"[Core {args.rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
+
+
+# ✅ FUTURE-PROOF AUDIO SAVING — Uses torchcodec.encoders.AudioEncoder
+def save_audio_fallback(path, tensor, sample_rate):
+    """
+    Saves audio tensor to file using torchcodec.encoders.AudioEncoder (recommended by PyTorch).
+    Falls back to torchaudio.save if torchcodec is unavailable.
+    """
+    try:
+        from torchcodec.encoders import AudioEncoder
+
+        # Normalize to [-1, 1] if needed
+        if tensor.abs().max() > 1.0:
+            tensor = tensor / tensor.abs().max()
+
+        # Ensure shape [channels, samples] — AudioEncoder requires 2D
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+
+        # Create encoder — matches PyTorch docs
+        encoder = AudioEncoder(tensor, sample_rate=sample_rate)
+
+        # Save to file — format inferred from extension
+        # Using 192 kbps for high quality
+        encoder.to_file(str(path), bit_rate=192000)
+
+        logging.debug(f"✅ Saved with torchcodec: {path}")
+        return
+
+    except ImportError:
+        logging.debug("torchcodec not available, falling back to torchaudio")
+    except Exception as e:
+        logging.warning(f"torchcodec failed: {e}, falling back to torchaudio")
+
+    # Fallback to torchaudio
+    torchaudio.save(str(path), tensor, sample_rate=sample_rate)
+    logging.debug(f"✅ Saved with torchaudio: {path}")
     logging.info(f"[Core {args.rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
 
 def run_generation_for_spawn(index, process_args_list):
