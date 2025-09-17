@@ -239,34 +239,106 @@ def run_generation_local(flags):
     args.start_idx = 0
     args.step = 1
     run_generation(args)
-
-def run_generation_for_spawn(index, flags):
-    """
-    Sets up arguments from flags provided by xmp.spawn and runs generation.
-    """
-    import torch_xla.core.xla_model as xla_model
-    import torch_xla.distributed.xla_multiprocessing as xla_multiprocessing
-    global xm
-    global xmp
-    xm = xla_model
-    xmp = xla_multiprocessing
     
+def run_generation_chunked(args):
+    """
+    Loads model once, then generates all lines in [args.start_idx, args.end_idx).
+    Maximizes TPU utilization by keeping model resident and processing sequentially.
+    """
+    import torch
+    import torch_xla.core.xla_model as xm
+    import os
+    import torchaudio
+
+    device = xm.xla_device()  # Important: use XLA device
+
+    # 🔥 LOAD MODEL ONCE PER PROCESS
+    logging.info(f"[Core {args.rank}] Loading TTS model...")
+    # --- REPLACE THIS WITH YOUR MODEL LOADING LOGIC ---
+    from tortoise.api import TextToSpeech  # or however you load it
+    tts_model = TextToSpeech(
+        models_dir=args.models_dir,
+        voice=args.voice,
+        preset=args.preset,
+        device=str(device)
+    )
+    # ---------------------------------------------------
+
+    # Load all lines
+    with open(args.lines_file, 'r', encoding='utf-8') as f:
+        all_lines = [line.strip() for line in f if line.strip()]
+
+    # Process assigned chunk
+    for i in range(args.start_idx, args.end_idx):
+        line = all_lines[i]
+        output_path = os.path.join(args.output_dir, f"line_{i+1:04d}.wav")
+
+        # Skip if already exists (for resuming)
+        if os.path.exists(output_path):
+            logging.info(f"[Core {args.rank}] Skipping line {i+1} (already exists)")
+            continue
+
+        logging.info(f"[Core {args.rank}] Generating line {i+1}/{args.total_lines}: {line[:60]}...")
+
+        try:
+            # 🔊 Generate audio — ADJUST THIS TO YOUR API
+            audio = tts_model.generate(
+                line,
+                diffusion_iterations=args.diffusion_iterations,
+                num_autoregressive_samples=args.num_autoregressive_samples,
+                voice=args.voice,
+                preset=args.preset
+            )
+
+            # Save output
+            torchaudio.save(output_path, audio.unsqueeze(0), sample_rate=22050)
+
+            # Optional: Force XLA sync if generation is very fast and you want to see progress
+            xm.mark_step()
+
+        except Exception as e:
+            logging.error(f"[Core {args.rank}] Failed to generate line {i+1}: {e}")
+            # Optionally: write a placeholder or log failure and continue
+            continue
+
+    logging.info(f"[Core {args.rank}] Finished chunk.")
+
+def run_generation_for_spawn(index, process_args_list):
+    """
+    Each TPU core processes a chunk of lines to maximize memory and compute utilization.
+    """
+    import torch_xla.core.xla_model as xm
+    import torch_xla.distributed.xla_multiprocessing as xmp
+
+    # Get this process's assigned chunk
+    flags = process_args_list[index]
+
     class Args:
         pass
     args = Args()
 
+    # Carry over all config
     args.lines_file = flags['lines_file']
     args.output_dir = flags['output_dir']
     args.hardware = flags['hardware']
     args.voice = flags['voice']
     args.preset = flags['preset']
     args.models_dir = flags['models_dir']
+    args.diffusion_iterations = flags.get('diffusion_iterations', 16)
+    args.num_autoregressive_samples = flags.get('num_autoregressive_samples', 1)
 
-    args.step = xm.xrt_world_size()
-    args.start_idx = xm.get_ordinal()
+    # NEW: Use assigned chunk — not strided!
+    args.start_idx = flags['start_idx']
+    args.end_idx = flags['end_idx']
+    args.total_lines = flags['total_lines']
+    args.rank = flags['rank']
 
-    logging.info(f"Worker {args.start_idx} starting on {args.hardware} with step {args.step}.")
-    run_generation(args)
+    logging.info(f"▶️ TPU Core {args.rank} starting. Processing lines [{args.start_idx} - {args.end_idx})")
+
+    # Run generation — this function must now loop internally over the chunk!
+    run_generation_chunked(args)
+
+    logging.info(f"✅ TPU Core {args.rank} finished processing {args.end_idx - args.start_idx} lines.")
 
 if __name__ == "__main__":
     logging.error("This is a library file and should not be run directly. Please use a driver script.")

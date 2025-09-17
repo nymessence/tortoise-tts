@@ -386,117 +386,133 @@ class TextToSpeech:
     def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
             return_deterministic_state=False,
             # autoregressive generation parameters follow
-            num_autoregressive_samples=1, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
+            num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
             # CVVP parameters follow
             cvvp_amount=.0,
             # diffusion generation parameters follow
             diffusion_iterations=16, cond_free=False, cond_free_k=2, diffusion_temperature=1.0,
             **hf_generate_kwargs):
-        """
-        Produces an audio clip of the given text being spoken with the given reference voice.
-        """
-        # --- Adjusted for 1-sample generation for speed and quality balance
-        self.autoregressive_batch_size = 1
-        num_autoregressive_samples = 1
-        k = 1 # Ensure k is consistent with num_autoregressive_samples
+            """
+            Produces an audio clip of the given text being spoken with the given reference voice.
+            """
+            # --- Adjusted for 8-sample generation for speed and quality balance
+            self.autoregressive_batch_size = 8
+            num_autoregressive_samples = 8
+            k = 8 # Ensure k is consistent with num_autoregressive_samples
 
-        deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
+            deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
 
-        text_tokens = torch.IntTensor(self.tokenizer.encode(text)).unsqueeze(0).to(self.device)
-        text_tokens = F.pad(text_tokens, (0, 1))
-        assert text_tokens.shape[-1] < 400, 'Too much text provided. Break the text up into separate segments and re-try inference.'
-        if voice_samples is not None:
-            auto_conditioning, diffusion_conditioning, auto_conds, _ = self.get_conditioning_latents(voice_samples, return_mels=True)
-        elif conditioning_latents is not None:
-            auto_conditioning, diffusion_conditioning = conditioning_latents
-        else:
-            auto_conditioning, diffusion_conditioning = self.get_random_conditioning_latents()
-        auto_conditioning = auto_conditioning.to(self.device)
-        diffusion_conditioning = diffusion_conditioning.to(self.device)
-
-        diffuser = load_discrete_vocoder_diffuser(desired_diffusion_steps=diffusion_iterations, cond_free=cond_free, cond_free_k=cond_free_k)
-        calm_token = 83 # Define the calm_token here
-
-        with torch.no_grad():
-            if verbose:
-                print("Generating autoregressive samples..")
-            
-            with self.temporary_cuda(self.autoregressive) as autoregressive:
-                # Direct generation of a single sample
-                best_results = autoregressive.inference_speech(
-                    auto_conditioning,
-                    text_tokens,
-                    do_sample=True,
-                    top_p=top_p,
-                    temperature=temperature,
-                    num_return_sequences=num_autoregressive_samples,
-                    length_penalty=length_penalty,
-                    repetition_penalty=repetition_penalty,
-                    max_generate_length=max_mel_tokens,
-                    **hf_generate_kwargs
-                )
-            
-            if verbose:
-                print("Transforming autoregressive outputs into audio..")
-            
-            # Since we only generate one sample, we can simplify the processing
-            # Best results is a list of tensors, so we grab the first one.
-            codes = best_results[0].unsqueeze(0)
-            if not torch.backends.mps.is_available():
-                with self.temporary_cuda(
-                    self.autoregressive
-                ) as autoregressive, torch.autocast(
-                    device_type="cuda" if not torch.backends.mps.is_available() else 'mps', dtype=torch.float16, enabled=self.half
-                ):
-                    latents = autoregressive(auto_conditioning, text_tokens,
-                                                 torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), codes,
-                                                 torch.tensor([codes.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                 return_latent=True, clip_inputs=False)
+            text_tokens = torch.IntTensor(self.tokenizer.encode(text)).unsqueeze(0).to(self.device)
+            text_tokens = F.pad(text_tokens, (0, 1))
+            assert text_tokens.shape[-1] < 400, 'Too much text provided. Break the text up into separate segments and re-try inference.'
+            if voice_samples is not None:
+                auto_conditioning, diffusion_conditioning, auto_conds, _ = self.get_conditioning_latents(voice_samples, return_mels=True)
+            elif conditioning_latents is not None:
+                auto_conditioning, diffusion_conditioning = conditioning_latents
             else:
-                with self.temporary_cuda(
-                    self.autoregressive
-                ) as autoregressive:
-                    latents = autoregressive(auto_conditioning, text_tokens,
-                                                 torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), codes,
-                                                 torch.tensor([codes.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                 return_latent=True, clip_inputs=False)
+                auto_conditioning, diffusion_conditioning = self.get_random_conditioning_latents()
+            auto_conditioning = auto_conditioning.to(self.device)
+            diffusion_conditioning = diffusion_conditioning.to(self.device)
 
-            ctokens = 0
-            for k_idx in range(codes.shape[-1]):
-                if codes[0, k_idx] == calm_token:
-                    ctokens += 1
+            diffuser = load_discrete_vocoder_diffuser(desired_diffusion_steps=diffusion_iterations, cond_free=cond_free, cond_free_k=cond_free_k)
+            calm_token = 83 # Define the calm_token here
+
+            with torch.no_grad():
+                if verbose:
+                    print("Generating autoregressive samples..")
+                
+                with self.temporary_cuda(self.autoregressive) as autoregressive:
+                    # Direct generation of a batch of 8 samples
+                    best_results = autoregressive.inference_speech(
+                        auto_conditioning,
+                        text_tokens,
+                        do_sample=True,
+                        top_p=top_p,
+                        temperature=temperature,
+                        num_return_sequences=num_autoregressive_samples,
+                        length_penalty=length_penalty,
+                        repetition_penalty=repetition_penalty,
+                        max_generate_length=max_mel_tokens,
+                        **hf_generate_kwargs
+                    )
+                
+                if verbose:
+                    print("Transforming autoregressive outputs into audio..")
+                
+                if not torch.backends.mps.is_available():
+                    with self.temporary_cuda(
+                        self.autoregressive
+                    ) as autoregressive, torch.autocast(
+                        device_type="cuda" if not torch.backends.mps.is_available() else 'mps', dtype=torch.float16, enabled=self.half
+                    ):
+                        best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
+                                                     torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                     torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                     return_latent=True, clip_inputs=False)
+                        del auto_conditioning
                 else:
-                    ctokens = 0
-                if ctokens > 8:
-                    latents = latents[:, :k_idx]
-                    break
+                    with self.temporary_cuda(
+                        self.autoregressive
+                    ) as autoregressive:
+                        best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
+                                                     torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                     torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                     return_latent=True, clip_inputs=False)
+                        del auto_conditioning
 
-            if not torch.backends.mps.is_available():
-                with self.temporary_cuda(self.diffusion) as diffusion, self.temporary_cuda(
-                    self.vocoder
-                ) as vocoder:
-                    mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                    verbose=verbose)
-                    wav = vocoder.inference(mel)
-                    wav_candidates = [wav.cpu()]
-            else:
-                diffusion, vocoder = self.diffusion, self.vocoder
-                diffusion_conditioning = diffusion_conditioning.cpu()
-                codes = codes.cpu()
-                latents = latents.cpu()
-                mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                               verbose=verbose)
-                wav = vocoder.inference(mel)
-                wav_candidates = [wav.cpu()]
+                wav_candidates = []
+                if not torch.backends.mps.is_available():
+                    with self.temporary_cuda(self.diffusion) as diffusion, self.temporary_cuda(
+                        self.vocoder
+                    ) as vocoder:
+                        for b in range(best_results.shape[0]):
+                            codes = best_results[b].unsqueeze(0)
+                            latents = best_latents[b].unsqueeze(0)
 
+                            ctokens = 0
+                            for k_idx in range(codes.shape[-1]):
+                                if codes[0, k_idx] == calm_token:
+                                    ctokens += 1
+                                else:
+                                    ctokens = 0
+                                if ctokens > 8:
+                                    latents = latents[:, :k_idx]
+                                    break
+                            mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
+                                                            verbose=verbose)
+                            wav = vocoder.inference(mel)
+                            wav_candidates.append(wav.cpu())
+                else:
+                    diffusion, vocoder = self.diffusion, self.vocoder
+                    diffusion_conditioning = diffusion_conditioning.cpu()
+                    for b in range(best_results.shape[0]):
+                        codes = best_results[b].unsqueeze(0).cpu()
+                        latents = best_latents[b].unsqueeze(0).cpu()
 
-            wav_candidates = [self.potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
-            res = wav_candidates[0]
+                        ctokens = 0
+                        for k_idx in range(codes.shape[-1]):
+                            if codes[0, k_idx] == calm_token:
+                                ctokens += 1
+                            else:
+                                ctokens = 0
+                            if ctokens > 8:
+                                latents = latents[:, :k_idx]
+                                break
+                        mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
+                                                       verbose=verbose)
+                        wav = vocoder.inference(mel)
+                        wav_candidates.append(wav.cpu())
 
-            if return_deterministic_state:
-                return res, (deterministic_seed, text, voice_samples, conditioning_latents)
-            else:
-                return res
+                wav_candidates = [self.potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
+                if len(wav_candidates) > 1:
+                    res = wav_candidates
+                else:
+                    res = wav_candidates[0]
+
+                if return_deterministic_state:
+                    return res, (deterministic_seed, text, voice_samples, conditioning_latents)
+                else:
+                    return res
             
     def potentially_redact(self, clip, text):
         if self.enable_redaction:
