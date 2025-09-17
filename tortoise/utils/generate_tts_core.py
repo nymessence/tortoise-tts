@@ -272,7 +272,7 @@ def run_generation_chunked(args):
     import os
     import logging
 
-    # ✅ HARDWARE-AWARE DEVICE SELECTION — CRITICAL FIX
+    # ✅ HARDWARE-AWARE DEVICE SELECTION
     if args.hardware == 'tpu':
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
@@ -286,9 +286,11 @@ def run_generation_chunked(args):
 
     logging.info(f"[Core {args.rank}] Loading TTS model...")
     from tortoise.api import TextToSpeech
+
+    # ✅ FIXED: Removed 'voice' from constructor — it's not supported
     tts_model = TextToSpeech(
         models_dir=args.models_dir,
-        voice=args.voice,
+        # voice=args.voice,  ← 💥 REMOVED — not a valid init param
         preset=args.preset,
         device=str(device)
     )
@@ -311,13 +313,12 @@ def run_generation_chunked(args):
 
     logging.info(f"[Core {args.rank}] Generating {len(chunk_lines)} lines in batches of {batch_size}...")
 
-    # ✅ CALL generate_batched_lines with ALL parameters
+    # ✅ CALL generate_batched_lines — 'voice' is passed here ✅
     audios = generate_batched_lines(
         tts_model=tts_model,
         lines=chunk_lines,
         diffusion_iterations=args.diffusion_iterations,
         num_autoregressive_samples=args.num_autoregressive_samples,
-        voice=args.voice,
         preset=args.preset,
         max_chunk_size=batch_size,
         device=str(device),
@@ -338,7 +339,6 @@ def run_generation_chunked(args):
                 logging.warning(f"[Core {args.rank}] Invalid audio for line {line_idx+1}. Using silent fallback.")
                 audio = silent_fallback
 
-            # ✅ FUTURE-PROOF AUDIO SAVING — Uses torchcodec.encoders.AudioEncoder
             save_audio_fallback(output_path, audio, sample_rate)
             logging.info(f"[Core {args.rank}] ✅ Saved: {output_path}")
 
