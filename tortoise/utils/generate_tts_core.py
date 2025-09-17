@@ -241,20 +241,15 @@ def run_generation_local(flags):
     run_generation(args)
     
 def run_generation_chunked(args):
-    """
-    Loads model once, then generates all lines in [args.start_idx, args.end_idx).
-    Maximizes TPU utilization by keeping model resident and processing sequentially.
-    Includes error handling, retries, and fallback to silent audio.
-    """
     import torch
     import torch_xla.core.xla_model as xm
     import os
     import torchaudio
     import time
+    import logging
 
     device = xm.xla_device()
 
-    # 🔥 LOAD MODEL ONCE PER PROCESS
     logging.info(f"[Core {args.rank}] Loading TTS model...")
     from tortoise.api import TextToSpeech
     tts_model = TextToSpeech(
@@ -269,66 +264,52 @@ def run_generation_chunked(args):
     with open(args.lines_file, 'r', encoding='utf-8') as f:
         all_lines = [line.strip() for line in f if line.strip()]
 
-    # Generate silent fallback (1 sec @ 22050 Hz)
-    silent_fallback = torch.zeros(1, 22050)
+    # Silent fallback
+    sample_rate = getattr(args, 'sample_rate', 22050)
+    silent_fallback = torch.zeros(1, sample_rate)
 
-    # Process assigned chunk
-    for i in range(args.start_idx, args.end_idx):
-        line = all_lines[i]
-        output_path = os.path.join(args.output_dir, f"line_{i+1:04d}.wav")
+    # Get batch size
+    batch_size = args.batch_size
 
-        # Skip if already exists (for resuming)
+    # Get lines for this core's chunk
+    chunk_lines = all_lines[args.start_idx:args.end_idx]
+    chunk_indices = list(range(args.start_idx, args.end_idx))
+
+    logging.info(f"[Core {args.rank}] Generating {len(chunk_lines)} lines in batches of {batch_size}...")
+
+    # ✅ CALL generate_batched_lines with ALL parameters
+    audios = generate_batched_lines(
+        tts_model=tts_model,
+        lines=chunk_lines,
+        diffusion_iterations=args.diffusion_iterations,
+        num_autoregressive_samples=args.num_autoregressive_samples,
+        voice=args.voice,
+        preset=args.preset,
+        max_chunk_size=batch_size,
+        device=str(device),
+        sample_rate=sample_rate
+    )
+
+    # Save outputs
+    for audio, line_idx in zip(audios, chunk_indices):
+        output_path = os.path.join(args.output_dir, f"line_{line_idx+1:04d}.wav")
+
+        # Skip if already exists
         if os.path.exists(output_path):
-            logging.info(f"[Core {args.rank}] Skipping line {i+1} (already exists)")
+            logging.info(f"[Core {args.rank}] Skipping line {line_idx+1} (already exists)")
             continue
 
-        logging.info(f"[Core {args.rank}] Generating line {i+1}/{args.total_lines}: {line[:60]}...")
+        try:
+            if not isinstance(audio, torch.Tensor):
+                logging.warning(f"[Core {args.rank}] Invalid audio for line {line_idx+1}. Using silent fallback.")
+                audio = silent_fallback
 
-        success = False
-        for attempt in range(3):
-            try:
-                # 🔊 Generate audio
-                audio = tts_model.generate(
-                    line,
-                    diffusion_iterations=args.diffusion_iterations,
-                    num_autoregressive_samples=args.num_autoregressive_samples,
-                    voice=args.voice,
-                    preset=args.preset
-                )
+            torchaudio.save(output_path, audio.cpu(), sample_rate=sample_rate)
+            logging.info(f"[Core {args.rank}] ✅ Saved: {output_path}")
 
-                # Handle list output
-                if isinstance(audio, list):
-                    if len(audio) == 0:
-                        raise ValueError("Generated audio list is empty.")
-                    audio = audio[0]  # Take first sample
-
-                # Validate tensor
-                if not isinstance(audio, torch.Tensor):
-                    raise TypeError(f"Expected tensor, got {type(audio)}")
-
-                # Normalize shape: [samples] or [1, samples] → [1, samples]
-                audio = audio.squeeze()  # Remove extra dims
-                if audio.dim() == 1:
-                    audio = audio.unsqueeze(0)  # Add channel dim
-
-                # Save to disk
-                torchaudio.save(output_path, audio.cpu(), sample_rate=22050)
-                logging.info(f"[Core {args.rank}] ✅ Saved: {output_path}")
-                success = True
-                break  # Exit retry loop
-
-            except Exception as e:
-                logging.error(f"[Core {args.rank}] ❌ Attempt {attempt+1} failed for line {i+1}: {e}")
-                if attempt < 2:
-                    delay = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                    logging.warning(f"[Core {args.rank}] Retrying in {delay}s...")
-                    time.sleep(delay)
-                else:
-                    logging.critical(f"[Core {args.rank}] 🛑 All retries failed. Saving silent fallback.")
-                    torchaudio.save(output_path, silent_fallback, sample_rate=22050)
-
-        # Optional: Force XLA sync to ensure progress is visible
-        xm.mark_step()
+        except Exception as e:
+            logging.error(f"[Core {args.rank}] ❌ Failed to save line {line_idx+1}: {e}")
+            torchaudio.save(output_path, silent_fallback, sample_rate=sample_rate)
 
     logging.info(f"[Core {args.rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
 

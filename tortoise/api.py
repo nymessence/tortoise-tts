@@ -628,5 +628,84 @@ def run_generation_local(flags):
     
     # Run the core generation function with the complete argument set
     run_generation(args)
+    
+def generate_batched_lines(
+    tts_model,
+    lines: list,
+    diffusion_iterations: int,
+    num_autoregressive_samples: int,
+    voice: str,
+    preset: str,
+    max_chunk_size: int,
+    device: str,
+    sample_rate: int = 22050
+):
+    """
+    Generates audio for a list of lines in micro-batches.
+    All parameters are passed explicitly — no hardcoding.
+    Returns list of audio tensors.
+    """
+    import torch
+    import torch_xla.core.xla_model as xm
+    import time
+    import logging
+
+    audios = []
+    total_lines = len(lines)
+
+    for chunk_start in range(0, total_lines, max_chunk_size):
+        chunk_end = min(chunk_start + max_chunk_size, total_lines)
+        chunk_lines = lines[chunk_start:chunk_end]
+
+        logging.info(f"▶️ Generating chunk [{chunk_start} - {chunk_end}) with {len(chunk_lines)} lines...")
+
+        chunk_audios = []
+        for i, line in enumerate(chunk_lines):
+            success = False
+            for attempt in range(3):
+                try:
+                    audio = tts_model.generate(
+                        line,
+                        diffusion_iterations=diffusion_iterations,
+                        num_autoregressive_samples=num_autoregressive_samples,
+                        voice=voice,
+                        preset=preset
+                    )
+
+                    # Handle list output
+                    if isinstance(audio, list):
+                        if len(audio) == 0:
+                            raise ValueError("Generated audio list is empty.")
+                        audio = audio[0]
+
+                    if not isinstance(audio, torch.Tensor):
+                        raise TypeError(f"Expected tensor, got {type(audio)}")
+
+                    # Normalize shape: [samples] → [1, samples]
+                    audio = audio.squeeze()
+                    if audio.dim() == 1:
+                        audio = audio.unsqueeze(0)
+
+                    chunk_audios.append(audio)
+                    success = True
+                    break
+
+                except Exception as e:
+                    logging.error(f"❌ Attempt {attempt+1} failed for line: {line[:50]}... Error: {e}")
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        logging.warning("Using silent fallback for failed line.")
+                        chunk_audios.append(torch.zeros(1, sample_rate))
+
+            # Optional: Sync every 2 lines to avoid lazy accumulation
+            if i % 2 == 1:
+                xm.mark_step()
+
+        # End of chunk — force sync
+        xm.mark_step()
+        audios.extend(chunk_audios)
+
+    return audios
 
 
