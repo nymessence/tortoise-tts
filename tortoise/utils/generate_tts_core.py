@@ -287,11 +287,11 @@ def run_generation_chunked(args):
     logging.info(f"[Core {args.rank}] Loading TTS model...")
     from tortoise.api import TextToSpeech
 
-    # ✅ FIXED: Removed 'voice' from constructor — it's not supported
+    # ✅ FIXED: Removed 'voice' and 'preset' from constructor — they're not valid init params
     tts_model = TextToSpeech(
         models_dir=args.models_dir,
-        # voice=args.voice,  ← 💥 REMOVED — not a valid init param
-        preset=args.preset,
+        # voice=args.voice,   ← 💥 REMOVED
+        # preset=args.preset, ← 💥 REMOVED
         device=str(device)
     )
     logging.info(f"[Core {args.rank}] Model loaded successfully.")
@@ -313,13 +313,14 @@ def run_generation_chunked(args):
 
     logging.info(f"[Core {args.rank}] Generating {len(chunk_lines)} lines in batches of {batch_size}...")
 
-    # ✅ CALL generate_batched_lines — 'voice' is passed here ✅
+    # ✅ CALL generate_batched_lines — 'voice' and 'preset' are passed here ✅
     audios = generate_batched_lines(
         tts_model=tts_model,
         lines=chunk_lines,
         diffusion_iterations=args.diffusion_iterations,
         num_autoregressive_samples=args.num_autoregressive_samples,
-        preset=args.preset,
+        voice=args.voice,      # ← ✅ CORRECT — passed to generate()
+        preset=args.preset,    # ← ✅ CORRECT — passed to generate()
         max_chunk_size=batch_size,
         device=str(device),
         sample_rate=sample_rate
