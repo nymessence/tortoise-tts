@@ -266,88 +266,86 @@ def run_generation_local(flags):
 def run_generation_chunked(args):
     """
     Loads model once, then generates all lines in [args.start_idx, args.end_idx) in micro-batches.
-    Maximizes TPU utilization by keeping model resident and processing sequentially.
     """
     import torch
     import os
     import logging
-
-    # ✅ HARDWARE-AWARE DEVICE SELECTION
+    
+    # Set the device based on hardware argument
     if args.hardware == 'tpu':
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
-        logging.info(f"[Core {args.rank}] Using TPU device: {device}")
+        rank = xm.get_ordinal()
+        logging.info(f"[Core {rank}] Using TPU device: {device}")
     elif torch.cuda.is_available():
         device = torch.device('cuda')
-        logging.info(f"[Core {args.rank}] Using GPU device: {device}")
+        rank = args.rank
+        logging.info(f"[Core {rank}] Using GPU device: {device}")
     else:
         device = torch.device('cpu')
-        logging.info(f"[Core {args.rank}] Using CPU device")
+        rank = args.rank
+        logging.info(f"[Core {rank}] Using CPU device")
 
-    logging.info(f"[Core {args.rank}] Loading TTS model...")
+    logging.info(f"[Core {rank}] Loading TTS model...")
     from tortoise.api import TextToSpeech
-
-    # ✅ FIXED: Removed 'voice' and 'preset' from constructor — they're not valid init params
+    
+    # Initialize the TTS model
     tts_model = TextToSpeech(
         models_dir=args.models_dir,
-        # voice=args.voice,   ← 💥 REMOVED
-        # preset=args.preset, ← 💥 REMOVED
-        device=str(device)
+        device=str(device) # Pass device string to the constructor
     )
-    logging.info(f"[Core {args.rank}] Model loaded successfully.")
+    tts_model.device_rank = rank # Store rank for logging in helper function
+    logging.info(f"[Core {rank}] Model loaded successfully.")
 
-    # Load all lines
+    # Load all lines from the script file
     with open(args.lines_file, 'r', encoding='utf-8') as f:
         all_lines = [line.strip() for line in f if line.strip()]
 
-    # Silent fallback
+    # Create a silent tensor as a fallback for failed generations
     sample_rate = getattr(args, 'sample_rate', 22050)
     silent_fallback = torch.zeros(1, sample_rate)
 
-    # Get batch size
-    batch_size = args.batch_size
-
-    # Get lines for this core's chunk
+    # Get lines and indices for this specific core's chunk
     chunk_lines = all_lines[args.start_idx:args.end_idx]
     chunk_indices = list(range(args.start_idx, args.end_idx))
 
-    logging.info(f"[Core {args.rank}] Generating {len(chunk_lines)} lines in batches of {batch_size}...")
+    logging.info(f"[Core {rank}] Generating {len(chunk_lines)} lines in batches of {args.batch_size}...")
 
-    # ✅ CALL generate_batched_lines — 'voice' and 'preset' are passed here ✅
+    # Call the batched generation function
     audios = generate_batched_lines(
         tts_model=tts_model,
         lines=chunk_lines,
         diffusion_iterations=args.diffusion_iterations,
         num_autoregressive_samples=args.num_autoregressive_samples,
-        voice=args.voice,      # ← ✅ CORRECT — passed to generate()
-        preset=args.preset,    # ← ✅ CORRECT — passed to generate()
-        max_chunk_size=batch_size,
+        voice=args.voice,
+        preset=args.preset,
+        max_chunk_size=args.batch_size,
         device=str(device),
         sample_rate=sample_rate
     )
 
-    # Save outputs
+    # Save the generated audio files
     for audio, line_idx in zip(audios, chunk_indices):
         output_path = os.path.join(args.output_dir, f"line_{line_idx+1:04d}.wav")
 
-        # Skip if already exists
-        if os.path.exists(output_path):
-            logging.info(f"[Core {args.rank}] Skipping line {line_idx+1} (already exists)")
+        if os.path.exists(output_path) and not args.force_regenerate:
+            logging.debug(f"[Core {rank}] Skipping line {line_idx+1} (already exists)")
             continue
 
         try:
+            # Use the silent fallback if generation returned None or an invalid object
             if not isinstance(audio, torch.Tensor):
-                logging.warning(f"[Core {args.rank}] Invalid audio for line {line_idx+1}. Using silent fallback.")
+                logging.warning(f"[Core {rank}] Invalid audio for line {line_idx+1}. Using silent fallback.")
                 audio = silent_fallback
-
+            
             save_audio_fallback(output_path, audio, sample_rate)
-            logging.info(f"[Core {args.rank}] ✅ Saved: {output_path}")
+            logging.info(f"[Core {rank}] ✅ Saved: {output_path}")
 
         except Exception as e:
-            logging.error(f"[Core {args.rank}] ❌ Failed to save line {line_idx+1}: {e}")
+            logging.error(f"[Core {rank}] ❌ Failed to save line {line_idx+1}: {e}")
             save_audio_fallback(output_path, silent_fallback, sample_rate)
 
-    logging.info(f"[Core {args.rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
+    logging.info(f"[Core {rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
 
 
 # ✅ FUTURE-PROOF AUDIO SAVING — Uses torchcodec.encoders.AudioEncoder
