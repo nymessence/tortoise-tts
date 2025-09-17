@@ -29,7 +29,7 @@ from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
 from tortoise.utils.install_tpu_deps import get_xla_wheel_url
 from tortoise.utils.device import get_device_name
 from tortoise.utils.torch_version_check import find_working_versions
-from tortoise.utils.generate_tts_core import run_generation_for_spawn 
+from tortoise.utils.generate_tts_core import run_generation_for_spawn, run_generation_chunked, run_generation_local 
 
 
 from contextlib import contextmanager
@@ -597,37 +597,6 @@ def run_generation_tpu(flags):
     # The number of processes (nprocs) should be explicitly set to 8 for a v3-8 TPU
     # This is crucial for distributing the work across all TPU cores.
     xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=8, start_method='fork')
-        
-def run_generation_local(flags):
-    """
-    Wrapper for single-process generation on a CPU or GPU.
-    """
-    # Dynamically import run_generation to avoid circular dependencies
-    from tortoise.utils.generate_tts_core import run_generation
-    
-    class Args:
-        """A simple object to pass arguments to the run_generation function."""
-        pass
-        
-    args = Args()
-    # Required parameters for run_generation
-    args.lines_file = flags.get('lines_file')
-    args.output_dir = flags.get('output_dir')
-    args.hardware = flags.get('hardware')
-    args.voice = flags.get('voice')
-    args.preset = flags.get('preset')
-    args.models_dir = flags.get('models_dir')
-    args.start_idx = 0
-    args.step = 1
-    
-    # Optional parameters that are critical for proper execution
-    args.k = flags.get('k', 1)  # Defaulting to a safe value
-    args.use_deepspeed = flags.get('use_deepspeed', False)
-    args.half = flags.get('half', False)
-    args.verbose = flags.get('verbose', False)
-    
-    # Run the core generation function with the complete argument set
-    run_generation(args)
     
 def generate_batched_lines(
     tts_model,

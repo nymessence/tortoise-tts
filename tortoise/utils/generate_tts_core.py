@@ -3,6 +3,9 @@ import sys
 import logging
 import torch
 import torchaudio
+import torch_xla.core.xla_model as xm
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.xla_multiprocessing as xmp
 import glob
 from pydub import AudioSegment
 import numpy as np
@@ -225,8 +228,9 @@ def stitch_audio(lines_dir, num_lines, output_path):
 
 def run_generation_local(flags):
     """
-    Local generation function for GPU/CPU fallback.
+    Local generation using modern chunked pipeline — even for single process.
     """
+    # Convert flags to single-chunk args for run_generation_chunked
     class Args:
         pass
     args = Args()
@@ -236,17 +240,31 @@ def run_generation_local(flags):
     args.voice = flags['voice']
     args.preset = flags['preset']
     args.models_dir = flags['models_dir']
-    args.start_idx = 0
-    args.step = 1
-    run_generation(args)
+    args.diffusion_iterations = flags.get('diffusion_iterations', 16)
+    args.num_autoregressive_samples = flags.get('num_autoregressive_samples', 1)
+    args.sample_rate = flags.get('sample_rate', 22050)
+    args.batch_size = flags.get('batch_size', 4)
+
+    # Load total lines to set chunk
+    try:
+        with open(args.lines_file, 'r', encoding='utf-8') as f:
+            all_lines = [line.strip() for line in f if line.strip()]
+            total_lines = len(all_lines)
+    except Exception as e:
+        logging.error(f"Failed to read lines file: {e}")
+        return
+
+    args.start_idx = flags.get('start_idx', 0)
+    args.end_idx = flags.get('end_idx', total_lines)
+    args.total_lines = total_lines
+    args.rank = 0  # Single process
+
+    logging.info(f"▶️ Local generation starting. Processing lines [{args.start_idx} - {args.end_idx})")
+    run_generation_chunked(args)
+    logging.info(f"✅ Local generation finished.")
     
 def run_generation_chunked(args):
-    import torch
-    import torch_xla.core.xla_model as xm
-    import os
-    import torchaudio
-    import time
-    import logging
+
 
     device = xm.xla_device()
 
@@ -317,8 +335,7 @@ def run_generation_for_spawn(index, process_args_list):
     """
     Each TPU core processes a chunk of lines to maximize memory and compute utilization.
     """
-    import torch_xla.core.xla_model as xm
-    import torch_xla.distributed.xla_multiprocessing as xmp
+    
 
     # Get this process's assigned chunk
     flags = process_args_list[index]
