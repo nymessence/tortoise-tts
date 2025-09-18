@@ -620,13 +620,6 @@ def generate_batched_lines(
     Generates audio for a list of lines in micro-batches using .tts() method.
     Fully compatible with your Tortoise fork.
     """
-    import os
-    import torch
-    import torch_xla.core.xla_model as xm
-    import time  # ✅ IMPORT HERE — ENSURES IT'S NOT SHADOWED
-    import logging
-    from tortoise.utils.audio import load_audio
-
     # ➕ LOAD VOICE SAMPLES ONCE
     voice_dir = os.path.join(models_dir, 'tortoise/voices', voice)
     if not os.path.isdir(voice_dir):
@@ -654,6 +647,7 @@ def generate_batched_lines(
             success = False
             for attempt in range(3):
                 try:
+                    # ✅ USE .tts() — YOUR FORK'S CORE METHOD
                     audio = tts_model.tts(
                         text=line,
                         voice_samples=voice_samples,
@@ -667,12 +661,14 @@ def generate_batched_lines(
                         verbose=False,
                     )
 
+                    # Handle list/tuple output
                     if isinstance(audio, (list, tuple)):
                         audio = audio[0] if len(audio) > 0 else torch.zeros(1, sample_rate)
 
                     if not isinstance(audio, torch.Tensor):
                         raise TypeError(f"Expected tensor, got {type(audio)}")
 
+                    # Normalize shape: [samples] → [1, samples]
                     audio = audio.squeeze()
                     if audio.dim() == 1:
                         audio = audio.unsqueeze(0)
@@ -684,16 +680,58 @@ def generate_batched_lines(
                 except Exception as e:
                     logging.error(f"❌ Attempt {attempt+1} failed for line: {line[:50]}... Error: {e}")
                     if attempt < 2:
-                        time.sleep(2 ** attempt)  # ✅ NOW SAFE
+                        # ✅ IMPORT TIME LOCALLY — IMMUNE TO GLOBAL SHADOWING
+                        import time as _time
+                        _time.sleep(2 ** attempt)
                     else:
                         logging.warning("Using silent fallback for failed line.")
                         chunk_audios.append(torch.zeros(1, sample_rate))
 
+            # Sync every 2 lines to avoid lazy accumulation
             if i % 2 == 1:
                 xm.mark_step()
 
+        # End of chunk — force sync
         xm.mark_step()
         audios.extend(chunk_audios)
 
     return audios
+    
+def save_audio_fallback(path, tensor, sample_rate, rank=None):
+    """
+    Saves audio tensor to file.
+    Tries torchcodec first (if available), falls back to torchaudio.
+    """
+    try:
+        # ✅ TRY TORCHCODEC (PyTorch 2.3+)
+        from torchcodec.encoders import AudioEncoder
+
+        # Normalize to [-1, 1]
+        if tensor.abs().max() > 1.0:
+            tensor = tensor / tensor.abs().max()
+
+        # Ensure 2D: [channels, samples]
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+
+        encoder = AudioEncoder(tensor, sample_rate=sample_rate)
+        encoder.to_file(str(path), bit_rate=192000)  # 192 kbps
+
+        if rank is not None:
+            logging.debug(f"[Core {rank}] ✅ Saved with torchcodec: {path}")
+        else:
+            logging.debug(f"✅ Saved with torchcodec: {path}")
+
+    except Exception as e:
+        # ✅ FALL BACK TO TORCHAUDIO
+        logging.debug(f"torchcodec failed or not available: {e}. Using torchaudio.")
+        try:
+            torchaudio.save(str(path), tensor, sample_rate=sample_rate)
+            if rank is not None:
+                logging.debug(f"[Core {rank}] ✅ Saved with torchaudio: {path}")
+            else:
+                logging.debug(f"✅ Saved with torchaudio: {path}")
+        except Exception as save_e:
+            logging.error(f"❌ Failed to save audio to {path}: {save_e}")
+            raise
 
