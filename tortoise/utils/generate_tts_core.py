@@ -4,24 +4,13 @@ import logging
 import torch
 import torchaudio
 import torch_xla.core.xla_model as xm
-import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
-import glob
-from pydub import AudioSegment
-import numpy as np
-from scipy.io.wavfile import write
 import re
-import json
 import time
 from gtts import gTTS
-import tempfile
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(process)d] %(message)s')
-
-# For TPU support, will be imported only when hardware is 'tpu'
-xm = None
-xmp = None
 
 # ========================
 # Core TTS Functions
@@ -154,6 +143,7 @@ def run_generation(args):
                 
     logging.info("All lines for this process have been generated.")
 
+
 def preprocess_script(script_path, preprocessed_script_path, instructions_path=None):
     """
     Cleans the script for TTS generation and optionally extracts command tokens.
@@ -195,10 +185,17 @@ def preprocess_script(script_path, preprocessed_script_path, instructions_path=N
         logging.error(f"❌ Failed to preprocess script: {e}")
         sys.exit(1)
 
+
 def stitch_audio(lines_dir, num_lines, output_path):
     """
     Stitches generated audio segments together, with a 1-second gap between lines.
     """
+    try:
+        from pydub import AudioSegment
+    except ImportError:
+        logging.error("pydub not installed. Required for stitching.")
+        raise
+
     try:
         all_audio = []
         GAP_DURATION_MS = 1000
@@ -226,11 +223,36 @@ def stitch_audio(lines_dir, num_lines, output_path):
         logging.error(f"❌ Failed to stitch audio: {e}", exc_info=True)
         raise
 
+
+def save_audio_fallback(path, tensor, sample_rate, rank=None):
+    """
+    Saves audio tensor to file using torchaudio.save.
+    Normalizes and ensures correct shape.
+    """
+    try:
+        # Normalize to [-1, 1] if needed
+        if tensor.abs().max() > 1.0:
+            tensor = tensor / tensor.abs().max()
+
+        # Ensure shape [channels, samples]
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+
+        torchaudio.save(str(path), tensor, sample_rate=sample_rate)
+        if rank is not None:
+            logging.debug(f"[Core {rank}] ✅ Saved: {path}")
+        else:
+            logging.debug(f"✅ Saved: {path}")
+
+    except Exception as e:
+        logging.error(f"❌ Failed to save audio to {path}: {e}")
+        raise
+
+
 def run_generation_local(flags):
     """
     Local generation using modern chunked pipeline — even for single process.
     """
-    # Convert flags to single-chunk args for run_generation_chunked
     class Args:
         pass
     args = Args()
@@ -244,8 +266,8 @@ def run_generation_local(flags):
     args.num_autoregressive_samples = flags.get('num_autoregressive_samples', 1)
     args.sample_rate = flags.get('sample_rate', 22050)
     args.batch_size = flags.get('batch_size', 4)
+    args.force_regenerate = flags.get('force_regenerate', False)  # ← ADDED
 
-    # Load total lines to set chunk
     try:
         with open(args.lines_file, 'r', encoding='utf-8') as f:
             all_lines = [line.strip() for line in f if line.strip()]
@@ -257,12 +279,13 @@ def run_generation_local(flags):
     args.start_idx = flags.get('start_idx', 0)
     args.end_idx = flags.get('end_idx', total_lines)
     args.total_lines = total_lines
-    args.rank = 0  # Single process
+    args.rank = 0
 
     logging.info(f"▶️ Local generation starting. Processing lines [{args.start_idx} - {args.end_idx})")
     run_generation_chunked(args)
     logging.info(f"✅ Local generation finished.")
-    
+
+
 def run_generation_chunked(args):
     """
     Loads model once, then generates all lines in [args.start_idx, args.end_idx) in micro-batches.
@@ -270,12 +293,11 @@ def run_generation_chunked(args):
     import torch
     import os
     import logging
-    
-    # Set the device based on hardware argument
+
     if args.hardware == 'tpu':
-        import torch_xla.core.xla_model as xm
-        device = xm.xla_device()
-        rank = xm.get_ordinal()
+        import torch_xla.core.xla_model as xm_mod
+        device = xm_mod.xla_device()
+        rank = xm_mod.get_ordinal()
         logging.info(f"[Core {rank}] Using TPU device: {device}")
     elif torch.cuda.is_available():
         device = torch.device('cuda')
@@ -288,30 +310,28 @@ def run_generation_chunked(args):
 
     logging.info(f"[Core {rank}] Loading TTS model...")
     from tortoise.api import TextToSpeech
-    
-    # Initialize the TTS model
+
     tts_model = TextToSpeech(
         models_dir=args.models_dir,
-        device=str(device) # Pass device string to the constructor
+        device=str(device)
     )
-    tts_model.device_rank = rank # Store rank for logging in helper function
+    tts_model.device_rank = rank
     logging.info(f"[Core {rank}] Model loaded successfully.")
 
-    # Load all lines from the script file
     with open(args.lines_file, 'r', encoding='utf-8') as f:
         all_lines = [line.strip() for line in f if line.strip()]
 
-    # Create a silent tensor as a fallback for failed generations
     sample_rate = getattr(args, 'sample_rate', 22050)
     silent_fallback = torch.zeros(1, sample_rate)
 
-    # Get lines and indices for this specific core's chunk
     chunk_lines = all_lines[args.start_idx:args.end_idx]
     chunk_indices = list(range(args.start_idx, args.end_idx))
 
     logging.info(f"[Core {rank}] Generating {len(chunk_lines)} lines in batches of {args.batch_size}...")
 
-    # Call the batched generation function
+    # ✅ generate_batched_lines is in api.py — we assume it's available
+    from tortoise.api import generate_batched_lines
+
     audios = generate_batched_lines(
         tts_model=tts_model,
         lines=chunk_lines,
@@ -324,7 +344,6 @@ def run_generation_chunked(args):
         sample_rate=sample_rate
     )
 
-    # Save the generated audio files
     for audio, line_idx in zip(audios, chunk_indices):
         output_path = os.path.join(args.output_dir, f"line_{line_idx+1:04d}.wav")
 
@@ -333,72 +352,30 @@ def run_generation_chunked(args):
             continue
 
         try:
-            # Use the silent fallback if generation returned None or an invalid object
             if not isinstance(audio, torch.Tensor):
                 logging.warning(f"[Core {rank}] Invalid audio for line {line_idx+1}. Using silent fallback.")
                 audio = silent_fallback
-            
-            save_audio_fallback(output_path, audio, sample_rate)
+
+            save_audio_fallback(output_path, audio, sample_rate, rank=rank)
             logging.info(f"[Core {rank}] ✅ Saved: {output_path}")
 
         except Exception as e:
             logging.error(f"[Core {rank}] ❌ Failed to save line {line_idx+1}: {e}")
-            save_audio_fallback(output_path, silent_fallback, sample_rate)
+            save_audio_fallback(output_path, silent_fallback, sample_rate, rank=rank)
 
     logging.info(f"[Core {rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
 
-
-# ✅ FUTURE-PROOF AUDIO SAVING — Uses torchcodec.encoders.AudioEncoder
-def save_audio_fallback(path, tensor, sample_rate):
-    """
-    Saves audio tensor to file using torchcodec.encoders.AudioEncoder (recommended by PyTorch).
-    Falls back to torchaudio.save if torchcodec is unavailable.
-    """
-    try:
-        from torchcodec.encoders import AudioEncoder
-
-        # Normalize to [-1, 1] if needed
-        if tensor.abs().max() > 1.0:
-            tensor = tensor / tensor.abs().max()
-
-        # Ensure shape [channels, samples] — AudioEncoder requires 2D
-        if tensor.dim() == 1:
-            tensor = tensor.unsqueeze(0)
-
-        # Create encoder — matches PyTorch docs
-        encoder = AudioEncoder(tensor, sample_rate=sample_rate)
-
-        # Save to file — format inferred from extension
-        # Using 192 kbps for high quality
-        encoder.to_file(str(path), bit_rate=192000)
-
-        logging.debug(f"✅ Saved with torchcodec: {path}")
-        return
-
-    except ImportError:
-        logging.debug("torchcodec not available, falling back to torchaudio")
-    except Exception as e:
-        logging.warning(f"torchcodec failed: {e}, falling back to torchaudio")
-
-    # Fallback to torchaudio
-    torchaudio.save(str(path), tensor, sample_rate=sample_rate)
-    logging.debug(f"✅ Saved with torchaudio: {path}")
-    logging.info(f"[Core {args.rank}] ✅ Finished chunk [{args.start_idx} - {args.end_idx}).")
 
 def run_generation_for_spawn(index, process_args_list):
     """
     Each TPU core processes a chunk of lines to maximize memory and compute utilization.
     """
-    
-
-    # Get this process's assigned chunk
     flags = process_args_list[index]
 
     class Args:
         pass
     args = Args()
 
-    # Carry over all config
     args.lines_file = flags['lines_file']
     args.output_dir = flags['output_dir']
     args.hardware = flags['hardware']
@@ -407,19 +384,18 @@ def run_generation_for_spawn(index, process_args_list):
     args.models_dir = flags['models_dir']
     args.diffusion_iterations = flags.get('diffusion_iterations', 16)
     args.num_autoregressive_samples = flags.get('num_autoregressive_samples', 1)
-
-    # NEW: Use assigned chunk — not strided!
     args.start_idx = flags['start_idx']
     args.end_idx = flags['end_idx']
     args.total_lines = flags['total_lines']
     args.rank = flags['rank']
+    args.force_regenerate = flags.get('force_regenerate', False)  # ← ADDED
 
     logging.info(f"▶️ TPU Core {args.rank} starting. Processing lines [{args.start_idx} - {args.end_idx})")
 
-    # Run generation — this function must now loop internally over the chunk!
     run_generation_chunked(args)
 
     logging.info(f"✅ TPU Core {args.rank} finished processing {args.end_idx - args.start_idx} lines.")
+
 
 if __name__ == "__main__":
     logging.error("This is a library file and should not be run directly. Please use a driver script.")
