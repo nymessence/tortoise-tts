@@ -513,6 +513,12 @@ class TextToSpeech:
                     return res, (deterministic_seed, text, voice_samples, conditioning_latents)
                 else:
                     return res
+                    
+    def generate(self, text, **kwargs):
+        """
+        Alias for .tts() to maintain compatibility with batched generation code.
+        """
+        return self.tts(text, **kwargs)
             
     def potentially_redact(self, clip, text):
         if self.enable_redaction:
@@ -607,17 +613,32 @@ def generate_batched_lines(
     preset: str,
     max_chunk_size: int,
     device: str,
-    sample_rate: int = 22050
+    sample_rate: int = 22050,
+    models_dir: str = "/tmp/tortoise-tts"
 ):
     """
     Generates audio for a list of lines in micro-batches.
-    All parameters are passed explicitly — no hardcoding.
-    Returns list of audio tensors.
+    Uses tts() — the core generation method in your fork.
     """
     import torch
     import torch_xla.core.xla_model as xm
     import time
     import logging
+    import os
+    from tortoise.utils.audio import load_audio
+
+    # ➕ LOAD VOICE SAMPLES ONCE
+    voice_dir = os.path.join(models_dir, 'tortoise/voices', voice)
+    if not os.path.isdir(voice_dir):
+        raise FileNotFoundError(f"Voice directory not found: {voice_dir}")
+    voice_files = [os.path.join(voice_dir, f) for f in os.listdir(voice_dir) if f.endswith('.wav')]
+    if not voice_files:
+        raise ValueError(f"No .wav files found in voice directory: {voice_dir}")
+    voice_samples = []
+    for f in voice_files:
+        audio_tensor = load_audio(f, sample_rate).to(device)
+        voice_samples.append(audio_tensor)
+    logging.info(f"Loaded {len(voice_samples)} voice samples for '{voice}'.")
 
     audios = []
     total_lines = len(lines)
@@ -633,19 +654,23 @@ def generate_batched_lines(
             success = False
             for attempt in range(3):
                 try:
-                    audio = tts_model.generate(
-                        line,
+                    # ✅ USE .tts() — YOUR FORK'S CORE METHOD
+                    audio = tts_model.tts(
+                        text=line,
+                        voice_samples=voice_samples,
                         diffusion_iterations=diffusion_iterations,
                         num_autoregressive_samples=num_autoregressive_samples,
-                        voice=voice,
-                        preset=preset
+                        temperature=0.8,
+                        top_p=0.8,
+                        repetition_penalty=2.0,
+                        length_penalty=1.0,
+                        cvvp_amount=0.0,
+                        verbose=False,  # Disable per-line logging
                     )
 
-                    # Handle list output
-                    if isinstance(audio, list):
-                        if len(audio) == 0:
-                            raise ValueError("Generated audio list is empty.")
-                        audio = audio[0]
+                    # Handle list/tuple output
+                    if isinstance(audio, (list, tuple)):
+                        audio = audio[0] if len(audio) > 0 else torch.zeros(1, sample_rate)
 
                     if not isinstance(audio, torch.Tensor):
                         raise TypeError(f"Expected tensor, got {type(audio)}")
@@ -662,7 +687,7 @@ def generate_batched_lines(
                 except Exception as e:
                     logging.error(f"❌ Attempt {attempt+1} failed for line: {line[:50]}... Error: {e}")
                     if attempt < 2:
-                        time.sleep(2 ** attempt)  # Exponential backoff
+                        time.sleep(2 ** attempt)
                     else:
                         logging.warning("Using silent fallback for failed line.")
                         chunk_audios.append(torch.zeros(1, sample_rate))
