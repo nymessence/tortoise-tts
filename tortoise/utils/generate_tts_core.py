@@ -226,11 +226,13 @@ def stitch_audio(lines_dir, num_lines, output_path):
 
 def save_audio_fallback(path, tensor, sample_rate, rank=None):
     """
-    Saves audio tensor to file using torchaudio.save.
-    Normalizes and ensures correct shape.
+    Saves audio tensor using torchcodec (if available) → falls back to torchaudio.
+    Uses 192 kbps for high quality.
     """
     try:
-        # Normalize to [-1, 1] if needed
+        from torchcodec.encoders import AudioEncoder
+
+        # Normalize to [-1, 1]
         if tensor.abs().max() > 1.0:
             tensor = tensor / tensor.abs().max()
 
@@ -238,16 +240,25 @@ def save_audio_fallback(path, tensor, sample_rate, rank=None):
         if tensor.dim() == 1:
             tensor = tensor.unsqueeze(0)
 
-        torchaudio.save(str(path), tensor, sample_rate=sample_rate)
+        encoder = AudioEncoder(tensor, sample_rate=sample_rate)
+        encoder.to_file(str(path), bit_rate=192000)
+
         if rank is not None:
-            logging.debug(f"[Core {rank}] ✅ Saved: {path}")
+            logging.debug(f"[Core {rank}] ✅ Saved with torchcodec: {path}")
         else:
-            logging.debug(f"✅ Saved: {path}")
+            logging.debug(f"✅ Saved with torchcodec: {path}")
 
     except Exception as e:
-        logging.error(f"❌ Failed to save audio to {path}: {e}")
-        raise
-
+        logging.debug(f"torchcodec failed or not available: {e}. Using torchaudio.")
+        try:
+            torchaudio.save(str(path), tensor, sample_rate=sample_rate)
+            if rank is not None:
+                logging.debug(f"[Core {rank}] ✅ Saved with torchaudio: {path}")
+            else:
+                logging.debug(f"✅ Saved with torchaudio: {path}")
+        except Exception as save_e:
+            logging.error(f"❌ Failed to save audio to {path}: {save_e}")
+            raise
 
 def run_generation_local(flags):
     """

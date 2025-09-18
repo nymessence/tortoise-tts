@@ -5,7 +5,7 @@ import subprocess
 import sys
 import psutil
 import logging
-from time import time
+import time
 from urllib import request
 
 import torch
@@ -632,7 +632,6 @@ def generate_batched_lines(
         raise ValueError(f"No .wav files found in voice directory: {voice_dir}")
     voice_samples = []
     for f in voice_files:
-        # ✅ NOW load_audio IS DEFINED
         audio_tensor = load_audio(f, sample_rate).to(device)
         voice_samples.append(audio_tensor)
     logging.info(f"Loaded {len(voice_samples)} voice samples for '{voice}'.")
@@ -681,8 +680,9 @@ def generate_batched_lines(
                 except Exception as e:
                     logging.error(f"❌ Attempt {attempt+1} failed for line: {line[:50]}... Error: {e}")
                     if attempt < 2:
-                        import time as _time
-                        _time.sleep(2 ** attempt)
+                        # ✅ SAFE: Import time module locally — immune to global shadowing
+                        import time
+                        time.sleep(2 ** attempt)
                     else:
                         logging.warning("Using silent fallback for failed line.")
                         chunk_audios.append(torch.zeros(1, sample_rate))
