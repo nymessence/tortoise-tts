@@ -22,7 +22,7 @@ from tortoise.models.clvp import CLVP
 from tortoise.models.cvvp import CVVP
 from tortoise.models.random_latent_generator import RandomLatentConverter
 from tortoise.models.vocoder import UnivNetGenerator
-from tortoise.utils.audio import wav_to_univnet_mel, denormalize_tacotron_mel, TacotronSTFT
+from tortoise.utils.audio import wav_to_univnet_mel, denormalize_tacotron_mel, TacotronSTFT, load_audio
 from tortoise.utils.diffusion import SpacedDiffusion, space_timesteps, get_named_beta_schedule
 from tortoise.utils.tokenizer import VoiceBpeTokenizer
 from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
@@ -31,9 +31,12 @@ from tortoise.utils.device import get_device_name
 from tortoise.utils.torch_version_check import find_working_versions
 from tortoise.utils.generate_tts_core import run_generation_for_spawn, run_generation_chunked, run_generation_local 
 
-
 from contextlib import contextmanager
 from huggingface_hub import hf_hub_download
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+
 pbar = None
 
 DEFAULT_MODELS_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'tortoise', 'models')
@@ -629,6 +632,7 @@ def generate_batched_lines(
         raise ValueError(f"No .wav files found in voice directory: {voice_dir}")
     voice_samples = []
     for f in voice_files:
+        # ✅ NOW load_audio IS DEFINED
         audio_tensor = load_audio(f, sample_rate).to(device)
         voice_samples.append(audio_tensor)
     logging.info(f"Loaded {len(voice_samples)} voice samples for '{voice}'.")
@@ -647,7 +651,6 @@ def generate_batched_lines(
             success = False
             for attempt in range(3):
                 try:
-                    # ✅ USE .tts() — YOUR FORK'S CORE METHOD
                     audio = tts_model.tts(
                         text=line,
                         voice_samples=voice_samples,
@@ -661,14 +664,12 @@ def generate_batched_lines(
                         verbose=False,
                     )
 
-                    # Handle list/tuple output
                     if isinstance(audio, (list, tuple)):
                         audio = audio[0] if len(audio) > 0 else torch.zeros(1, sample_rate)
 
                     if not isinstance(audio, torch.Tensor):
                         raise TypeError(f"Expected tensor, got {type(audio)}")
 
-                    # Normalize shape: [samples] → [1, samples]
                     audio = audio.squeeze()
                     if audio.dim() == 1:
                         audio = audio.unsqueeze(0)
@@ -680,18 +681,15 @@ def generate_batched_lines(
                 except Exception as e:
                     logging.error(f"❌ Attempt {attempt+1} failed for line: {line[:50]}... Error: {e}")
                     if attempt < 2:
-                        # ✅ IMPORT TIME LOCALLY — IMMUNE TO GLOBAL SHADOWING
                         import time as _time
                         _time.sleep(2 ** attempt)
                     else:
                         logging.warning("Using silent fallback for failed line.")
                         chunk_audios.append(torch.zeros(1, sample_rate))
 
-            # Sync every 2 lines to avoid lazy accumulation
             if i % 2 == 1:
                 xm.mark_step()
 
-        # End of chunk — force sync
         xm.mark_step()
         audios.extend(chunk_audios)
 
