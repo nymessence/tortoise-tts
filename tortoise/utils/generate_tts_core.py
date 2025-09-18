@@ -3,11 +3,14 @@ import sys
 import logging
 import torch
 import torchaudio
-import torch_xla.core.xla_model as xm
+import torch_xla.core.xla_model as xm  # ✅ MOVED TO TOP — USED IN run_generation AND run_generation_chunked
 import torch_xla.distributed.xla_multiprocessing as xmp
 import re
 import time
+import json  # ✅ ADDED — used in preprocess_script
+import tempfile  # ✅ ADDED — used in run_generation fallback
 from gtts import gTTS
+from pydub import AudioSegment  # ✅ ADDED — used in stitch_audio and fallback
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(process)d] %(message)s')
@@ -29,10 +32,7 @@ def run_generation(args):
         sys.exit(1)
 
     if args.hardware == 'tpu':
-        if xm is None:
-            import torch_xla.core.xla_model as xla_model
-            xm = xla_model
-        device = xm.xla_device()
+        device = xm.xla_device()  # ✅ USE TOP-LEVEL xm
         logging.info(f"TPU device initialized in worker: {device}")
     elif args.hardware == 'gpu' and torch.cuda.is_available():
         device = torch.device('cuda')
@@ -125,12 +125,10 @@ def run_generation(args):
         if not success:
             logging.critical(f"🛑 All Tortoise-TTS attempts failed. Initiating fallback generation for line '{line}'.")
             try:
-                # Use gTTS for fallback. You can swap this for any other reliable engine.
                 tts_fallback = gTTS(text=line, lang='en')
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                 tts_fallback.save(temp_file.name)
                 
-                # Convert the MP3 to a WAV file to match your pipeline's format
                 audio = AudioSegment.from_mp3(temp_file.name)
                 audio.export(output_path, format="wav")
                 os.remove(temp_file.name)
@@ -138,7 +136,6 @@ def run_generation(args):
                 logging.info(f"✅ Fallback audio saved to '{output_path}'.")
             except Exception as e:
                 logging.critical(f"❌ Fallback generation also failed for line '{line}': {e}. Creating a silent audio file.")
-                # Create a silent audio placeholder if everything fails
                 AudioSegment.silent(duration=1000).export(output_path, format="wav")
                 
     logging.info("All lines for this process have been generated.")
@@ -190,12 +187,6 @@ def stitch_audio(lines_dir, num_lines, output_path):
     """
     Stitches generated audio segments together, with a 1-second gap between lines.
     """
-    try:
-        from pydub import AudioSegment
-    except ImportError:
-        logging.error("pydub not installed. Required for stitching.")
-        raise
-
     try:
         all_audio = []
         GAP_DURATION_MS = 1000
@@ -260,6 +251,7 @@ def save_audio_fallback(path, tensor, sample_rate, rank=None):
             logging.error(f"❌ Failed to save audio to {path}: {save_e}")
             raise
 
+
 def run_generation_local(flags):
     """
     Local generation using modern chunked pipeline — even for single process.
@@ -277,7 +269,7 @@ def run_generation_local(flags):
     args.num_autoregressive_samples = flags.get('num_autoregressive_samples', 1)
     args.sample_rate = flags.get('sample_rate', 22050)
     args.batch_size = flags.get('batch_size', 4)
-    args.force_regenerate = flags.get('force_regenerate', False)  # ← ADDED
+    args.force_regenerate = flags.get('force_regenerate', False)
 
     try:
         with open(args.lines_file, 'r', encoding='utf-8') as f:
@@ -304,11 +296,11 @@ def run_generation_chunked(args):
     import torch
     import os
     import logging
+    from tortoise.api import TextToSpeech, generate_batched_lines
 
     if args.hardware == 'tpu':
-        import torch_xla.core.xla_model as xm_mod
-        device = xm_mod.xla_device()
-        rank = xm_mod.get_ordinal()
+        device = xm.xla_device()  # ✅ USE TOP-LEVEL xm
+        rank = xm.get_ordinal()   # ✅ USE TOP-LEVEL xm
         logging.info(f"[Core {rank}] Using TPU device: {device}")
     elif torch.cuda.is_available():
         device = torch.device('cuda')
@@ -320,8 +312,6 @@ def run_generation_chunked(args):
         logging.info(f"[Core {rank}] Using CPU device")
 
     logging.info(f"[Core {rank}] Loading TTS model...")
-    from tortoise.api import TextToSpeech
-
     tts_model = TextToSpeech(
         models_dir=args.models_dir,
         device=str(device)
@@ -339,9 +329,6 @@ def run_generation_chunked(args):
     chunk_indices = list(range(args.start_idx, args.end_idx))
 
     logging.info(f"[Core {rank}] Generating {len(chunk_lines)} lines in batches of {args.batch_size}...")
-
-    # ✅ generate_batched_lines is in api.py — we assume it's available
-    from tortoise.api import generate_batched_lines
 
     audios = generate_batched_lines(
         tts_model=tts_model,
@@ -399,7 +386,7 @@ def run_generation_for_spawn(index, process_args_list):
     args.end_idx = flags['end_idx']
     args.total_lines = flags['total_lines']
     args.rank = flags['rank']
-    args.force_regenerate = flags.get('force_regenerate', False)  # ← ADDED
+    args.force_regenerate = flags.get('force_regenerate', False)
 
     logging.info(f"▶️ TPU Core {args.rank} starting. Processing lines [{args.start_idx} - {args.end_idx})")
 
