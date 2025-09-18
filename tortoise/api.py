@@ -617,14 +617,14 @@ def generate_batched_lines(
     models_dir: str = "/tmp/tortoise-tts"
 ):
     """
-    Generates audio for a list of lines in micro-batches.
-    Uses tts() — the core generation method in your fork.
+    Generates audio for a list of lines in micro-batches using .tts() method.
+    Fully compatible with your Tortoise fork.
     """
+    import os
     import torch
     import torch_xla.core.xla_model as xm
-    import time
+    import time  # ✅ IMPORT HERE — ENSURES IT'S NOT SHADOWED
     import logging
-    import os
     from tortoise.utils.audio import load_audio
 
     # ➕ LOAD VOICE SAMPLES ONCE
@@ -654,7 +654,6 @@ def generate_batched_lines(
             success = False
             for attempt in range(3):
                 try:
-                    # ✅ USE .tts() — YOUR FORK'S CORE METHOD
                     audio = tts_model.tts(
                         text=line,
                         voice_samples=voice_samples,
@@ -665,17 +664,15 @@ def generate_batched_lines(
                         repetition_penalty=2.0,
                         length_penalty=1.0,
                         cvvp_amount=0.0,
-                        verbose=False,  # Disable per-line logging
+                        verbose=False,
                     )
 
-                    # Handle list/tuple output
                     if isinstance(audio, (list, tuple)):
                         audio = audio[0] if len(audio) > 0 else torch.zeros(1, sample_rate)
 
                     if not isinstance(audio, torch.Tensor):
                         raise TypeError(f"Expected tensor, got {type(audio)}")
 
-                    # Normalize shape: [samples] → [1, samples]
                     audio = audio.squeeze()
                     if audio.dim() == 1:
                         audio = audio.unsqueeze(0)
@@ -687,19 +684,16 @@ def generate_batched_lines(
                 except Exception as e:
                     logging.error(f"❌ Attempt {attempt+1} failed for line: {line[:50]}... Error: {e}")
                     if attempt < 2:
-                        time.sleep(2 ** attempt)
+                        time.sleep(2 ** attempt)  # ✅ NOW SAFE
                     else:
                         logging.warning("Using silent fallback for failed line.")
                         chunk_audios.append(torch.zeros(1, sample_rate))
 
-            # Optional: Sync every 2 lines to avoid lazy accumulation
             if i % 2 == 1:
                 xm.mark_step()
 
-        # End of chunk — force sync
         xm.mark_step()
         audios.extend(chunk_audios)
 
     return audios
-
 
