@@ -37,6 +37,14 @@ def run_generation(args):
         except ImportError as e:
             logging.error(f"Failed to import torch_xla for TPU: {e}. Falling back to GPU/CPU.")
             args.hardware = 'gpu' # Fallback path
+    elif args.hardware == 'photonic':
+        try:
+            import photonics_accelerator_lib as pa
+            device = pa.photonic_device()
+            logging.info(f"Photonic device initialized in worker: {device}")
+        except ImportError as e:
+            logging.error(f"Failed to import photonic library: {e}. Falling back to GPU/CPU.")
+            args.hardware = 'gpu'
     
     if args.hardware == 'gpu' and torch.cuda.is_available():
         device = torch.device('cuda')
@@ -312,6 +320,17 @@ def run_generation_chunked(args):
             logging.info(f"[Core {rank}] Using TPU device: {device}")
         except ImportError as e:
             logging.error(f"Failed to import torch_xla for TPU: {e}. Falling back to GPU/CPU.")
+            device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+            rank = args.rank
+            logging.info(f"[Core {rank}] Using fallback device: {device}")
+    elif args.hardware == 'photonic':
+        try:
+            import photonics_accelerator_lib as pa
+            device = pa.photonic_device()
+            rank = 0 # Photonic devices may not have a concept of rank, so default to 0.
+            logging.info(f"[Core {rank}] Using photonic device: {device}")
+        except ImportError as e:
+            logging.error(f"Failed to import photonic library: {e}. Falling back to GPU/CPU.")
             device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
             rank = args.rank
             logging.info(f"[Core {rank}] Using fallback device: {device}")
