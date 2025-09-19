@@ -3,14 +3,12 @@ import sys
 import logging
 import torch
 import torchaudio
-import torch_xla.core.xla_model as xm  # ✅ MOVED TO TOP — USED IN run_generation AND run_generation_chunked
-import torch_xla.distributed.xla_multiprocessing as xmp
 import re
 import time
-import json  # ✅ ADDED — used in preprocess_script
-import tempfile  # ✅ ADDED — used in run_generation fallback
+import json
+import tempfile
 from gtts import gTTS
-from pydub import AudioSegment  # ✅ ADDED — used in stitch_audio and fallback
+from pydub import AudioSegment
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(process)d] %(message)s')
@@ -23,7 +21,6 @@ def run_generation(args):
     """
     Main generation logic for a single process with fallback.
     """
-    global xm
     try:
         from tortoise.api import TextToSpeech
         from tortoise.utils.audio import load_audio
@@ -31,10 +28,17 @@ def run_generation(args):
         logging.error("Could not import Tortoise TTS. Ensure the repository is in your PYTHONPATH.")
         sys.exit(1)
 
+    # This is the CRITICAL FIX. The import is now conditional.
     if args.hardware == 'tpu':
-        device = xm.xla_device()  # ✅ USE TOP-LEVEL xm
-        logging.info(f"TPU device initialized in worker: {device}")
-    elif args.hardware == 'gpu' and torch.cuda.is_available():
+        try:
+            import torch_xla.core.xla_model as xm
+            device = xm.xla_device()
+            logging.info(f"TPU device initialized in worker: {device}")
+        except ImportError as e:
+            logging.error(f"Failed to import torch_xla for TPU: {e}. Falling back to GPU/CPU.")
+            args.hardware = 'gpu' # Fallback path
+    
+    if args.hardware == 'gpu' and torch.cuda.is_available():
         device = torch.device('cuda')
         logging.info("Using GPU for generation.")
     else:
@@ -217,7 +221,7 @@ def stitch_audio(lines_dir, num_lines, output_path):
 
 def save_audio_fallback(path, tensor, sample_rate, rank=None):
     """
-    Saves audio tensor using torchcodec (if available) → falls back to torchaudio.
+    Saves audio tensor using torchcodec (if available) -> falls back to torchaudio.
     Uses 192 kbps for high quality.
     """
     try:
@@ -243,6 +247,7 @@ def save_audio_fallback(path, tensor, sample_rate, rank=None):
         logging.debug(f"torchcodec failed or not available: {e}. Using torchaudio.")
         try:
             torchaudio.save(str(path), tensor, sample_rate=sample_rate)
+        
             if rank is not None:
                 logging.debug(f"[Core {rank}] ✅ Saved with torchaudio: {path}")
             else:
@@ -298,10 +303,18 @@ def run_generation_chunked(args):
     import logging
     from tortoise.api import TextToSpeech, generate_batched_lines
 
+    # Conditional import is the CRITICAL FIX here.
     if args.hardware == 'tpu':
-        device = xm.xla_device()  # ✅ USE TOP-LEVEL xm
-        rank = xm.get_ordinal()   # ✅ USE TOP-LEVEL xm
-        logging.info(f"[Core {rank}] Using TPU device: {device}")
+        try:
+            import torch_xla.core.xla_model as xm
+            device = xm.xla_device()
+            rank = xm.get_ordinal()
+            logging.info(f"[Core {rank}] Using TPU device: {device}")
+        except ImportError as e:
+            logging.error(f"Failed to import torch_xla for TPU: {e}. Falling back to GPU/CPU.")
+            device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+            rank = args.rank
+            logging.info(f"[Core {rank}] Using fallback device: {device}")
     elif torch.cuda.is_available():
         device = torch.device('cuda')
         rank = args.rank
@@ -387,6 +400,8 @@ def run_generation_for_spawn(index, process_args_list):
     args.total_lines = flags['total_lines']
     args.rank = flags['rank']
     args.force_regenerate = flags.get('force_regenerate', False)
+    args.sample_rate = flags.get('sample_rate', 22050)
+    args.batch_size = flags.get('batch_size', 4)
 
     logging.info(f"▶️ TPU Core {args.rank} starting. Processing lines [{args.start_idx} - {args.end_idx})")
 
@@ -398,3 +413,4 @@ def run_generation_for_spawn(index, process_args_list):
 if __name__ == "__main__":
     logging.error("This is a library file and should not be run directly. Please use a driver script.")
     sys.exit(1)
+
