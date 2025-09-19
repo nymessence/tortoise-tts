@@ -1,0 +1,6 @@
+-r requirements.txt
+torch>=2.3.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+torch_xla[tpu]>=2.3.0
+
