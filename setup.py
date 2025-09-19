@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setuptools.setup(
     name="tortoise-tts",
     packages=setuptools.find_packages(),
-    version="3.1.0 beta",
+    version="3.1.0b1",
     author="Nymessence",
     author_email="no official email yet",
     description="A high quality multi-voice text-to-speech library (nymessence fork)",
@@ -39,3 +39,4 @@ setuptools.setup(
     ],
     python_requires=">=3.6",
 )
+
