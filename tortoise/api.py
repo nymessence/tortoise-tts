@@ -386,7 +386,7 @@ class TextToSpeech:
         settings.update(kwargs) # allow overriding of preset settings with kwargs
         return self.tts(text, **settings)
 
-    def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
+def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
             return_deterministic_state=False,
             # autoregressive generation parameters follow
             num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
@@ -398,10 +398,10 @@ class TextToSpeech:
             """
             Produces an audio clip of the given text being spoken with the given reference voice.
             """
-            # --- Adjusted for 8-sample generation for speed and quality balance
-            self.autoregressive_batch_size = 8
-            num_autoregressive_samples = 8
-            k = 8 # Ensure k is consistent with num_autoregressive_samples
+            # The following lines were hard-coding the number of samples and have been removed.
+            # self.autoregressive_batch_size = 8
+            # num_autoregressive_samples = 8
+            # k = 8 # Ensure k is consistent with num_autoregressive_samples
 
             deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
 
@@ -425,7 +425,7 @@ class TextToSpeech:
                     print("Generating autoregressive samples..")
                 
                 with self.temporary_cuda(self.autoregressive) as autoregressive:
-                    # Direct generation of a batch of 8 samples
+                    # Direct generation of a batch of k samples
                     best_results = autoregressive.inference_speech(
                         auto_conditioning,
                         text_tokens,
@@ -449,18 +449,18 @@ class TextToSpeech:
                         device_type="cuda" if not torch.backends.mps.is_available() else 'mps', dtype=torch.float16, enabled=self.half
                     ):
                         best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                                     torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
-                                                     torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                     return_latent=True, clip_inputs=False)
+                                                         torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                         torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                         return_latent=True, clip_inputs=False)
                         del auto_conditioning
                 else:
                     with self.temporary_cuda(
                         self.autoregressive
                     ) as autoregressive:
                         best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                                     torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
-                                                     torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                     return_latent=True, clip_inputs=False)
+                                                         torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                         torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                         return_latent=True, clip_inputs=False)
                         del auto_conditioning
 
                 wav_candidates = []
@@ -482,7 +482,7 @@ class TextToSpeech:
                                     latents = latents[:, :k_idx]
                                     break
                             mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                            verbose=verbose)
+                                                             verbose=verbose)
                             wav = vocoder.inference(mel)
                             wav_candidates.append(wav.cpu())
                 else:
@@ -502,7 +502,7 @@ class TextToSpeech:
                                 latents = latents[:, :k_idx]
                                 break
                         mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                       verbose=verbose)
+                                                         verbose=verbose)
                         wav = vocoder.inference(mel)
                         wav_candidates.append(wav.cpu())
 
@@ -516,6 +516,37 @@ class TextToSpeech:
                     return res, (deterministic_seed, text, voice_samples, conditioning_latents)
                 else:
                     return res
+                
+    def generate(self, text, **kwargs):
+        """
+        Alias for .tts() to maintain compatibility with batched generation code.
+        """
+        return self.tts(text, **kwargs)
+        
+    def potentially_redact(self, clip, text):
+        if self.enable_redaction:
+            return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
+        return clip
+
+    def deterministic_state(self, seed=None):
+        """
+        Sets the random seeds that tortoise uses to the current time() and returns that seed so results can be
+        reproduced.
+        """
+        seed = int(time.time()) if seed is None else seed
+        torch.manual_seed(seed)
+        random.seed(seed)
+        # Can't currently set this because of CUBLAS. TODO: potentially enable it if necessary.
+        # torch.use_deterministic_algorithms(True)
+
+        return seed
+        
+    def tts_xla_parallel(self, flags, num_processes=8):
+        """
+        Launches the TTS generation across all TPU cores using xmp.spawn.
+        """
+        print(f"Spawning {num_processes} processes for TPU utilization.")
+        xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=num_processes)
                     
     def generate(self, text, **kwargs):
         """
