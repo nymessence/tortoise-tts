@@ -224,8 +224,7 @@ class TextToSpeech:
 
     def __init__(self, autoregressive_batch_size=None, models_dir=MODELS_DIR, 
                  enable_redaction=True, kv_cache=False, use_deepspeed=True, half=False, device=None,
-                 tokenizer_vocab_file=None, tokenizer_basic=False):
-
+                 tokenizer_vocab_file=None, tokenizer_basic=False, chunk_size=None):
         """
         Constructor
         :param autoregressive_batch_size: Specifies how many samples to generate per batch. Lower this if you are seeing
@@ -236,12 +235,18 @@ class TextToSpeech:
                                  (but are still rendered by the model). This can be used for prompt engineering.
                                  Default is true.
         :param device: Device to use when running the model. If omitted, the device will be automatically chosen.
+        :param chunk_size: An explicit integer value to set the number of autoregressive samples, overriding the default.
         """
         self.models_dir = models_dir
-        self.autoregressive_batch_size = pick_best_batch_size_for_gpu() if autoregressive_batch_size is None else autoregressive_batch_size
+        # Use the provided chunk_size if it exists, otherwise fall back to the existing logic
+        if chunk_size is not None:
+            self.autoregressive_batch_size = chunk_size
+        else:
+            self.autoregressive_batch_size = pick_best_batch_size_for_gpu() if autoregressive_batch_size is None else autoregressive_batch_size
+        
         self.enable_redaction = enable_redaction
         if device is None:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else'cpu')
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
             self.device = torch.device(device)
             
@@ -288,6 +293,7 @@ class TextToSpeech:
         # Random latent generators (RLGs) are loaded lazily.
         self.rlg_auto = None
         self.rlg_diffusion = None
+
     @contextmanager
     def temporary_cuda(self, model):
         m = model.to(self.device)
@@ -375,6 +381,7 @@ class TextToSpeech:
         settings = {'temperature': .8, 'length_penalty': 1.0, 'repetition_penalty': 2.0,
                     'top_p': .8,
                     'cond_free_k': 2.0, 'diffusion_temperature': 1.0}
+        
         # Presets are defined here.
         presets = {
             'ultra_fast': {'num_autoregressive_samples': 16, 'diffusion_iterations': 30, 'cond_free': False},
@@ -382,27 +389,29 @@ class TextToSpeech:
             'standard': {'num_autoregressive_samples': 256, 'diffusion_iterations': 200},
             'high_quality': {'num_autoregressive_samples': 256, 'diffusion_iterations': 400},
         }
+        
+        # Update with preset settings, then override with explicit kwargs if they exist.
         settings.update(presets[preset])
-        settings.update(kwargs) # allow overriding of preset settings with kwargs
+        settings.update(kwargs) 
+        
+        # Use the instance's autoregressive_batch_size if it was explicitly set.
+        if self.autoregressive_batch_size is not None:
+            settings['num_autoregressive_samples'] = self.autoregressive_batch_size
+            
         return self.tts(text, **settings)
 
     def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
-                return_deterministic_state=False,
-                # autoregressive generation parameters follow
-                num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=600,
-                # CVVP parameters follow
-                cvvp_amount=.0,
-                # diffusion generation parameters follow
-                diffusion_iterations=16, cond_free=False, cond_free_k=2, diffusion_temperature=1.0,
-                **hf_generate_kwargs):
+                 return_deterministic_state=False,
+                 # autoregressive generation parameters follow
+                 num_autoregressive_samples=8, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=600,
+                 # CVVP parameters follow
+                 cvvp_amount=.0,
+                 # diffusion generation parameters follow
+                 diffusion_iterations=16, cond_free=False, cond_free_k=2, diffusion_temperature=1.0,
+                 **hf_generate_kwargs):
                 """
                 Produces an audio clip of the given text being spoken with the given reference voice.
                 """
-                # The following lines were hard-coding the number of samples and have been removed.
-                # self.autoregressive_batch_size = 8
-                # num_autoregressive_samples = 8
-                # k = 8 # Ensure k is consistent with num_autoregressive_samples
-
                 deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
 
                 text_tokens = torch.IntTensor(self.tokenizer.encode(text)).unsqueeze(0).to(self.device)
@@ -449,18 +458,18 @@ class TextToSpeech:
                             device_type="cuda" if not torch.backends.mps.is_available() else 'mps', dtype=torch.float16, enabled=self.half
                         ):
                             best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                                             torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
-                                                             torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                             return_latent=True, clip_inputs=False)
+                                                         torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                         torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                         return_latent=True, clip_inputs=False)
                             del auto_conditioning
                     else:
                         with self.temporary_cuda(
                             self.autoregressive
                         ) as autoregressive:
                             best_latents = autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                                             torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
-                                                             torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                                             return_latent=True, clip_inputs=False)
+                                                         torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), best_results,
+                                                         torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
+                                                         return_latent=True, clip_inputs=False)
                             del auto_conditioning
 
                     wav_candidates = []
@@ -482,7 +491,7 @@ class TextToSpeech:
                                         latents = latents[:, :k_idx]
                                         break
                                 mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                                 verbose=verbose)
+                                                               verbose=verbose)
                                 wav = vocoder.inference(mel)
                                 wav_candidates.append(wav.cpu())
                     else:
@@ -502,7 +511,7 @@ class TextToSpeech:
                                     latents = latents[:, :k_idx]
                                     break
                             mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning, temperature=diffusion_temperature,
-                                                             verbose=verbose)
+                                                           verbose=verbose)
                             wav = vocoder.inference(mel)
                             wav_candidates.append(wav.cpu())
 
@@ -516,44 +525,13 @@ class TextToSpeech:
                         return res, (deterministic_seed, text, voice_samples, conditioning_latents)
                     else:
                         return res
-                
-    def generate(self, text, **kwargs):
-        """
-        Alias for .tts() to maintain compatibility with batched generation code.
-        """
-        return self.tts(text, **kwargs)
-        
-    def potentially_redact(self, clip, text):
-        if self.enable_redaction:
-            return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
-        return clip
-
-    def deterministic_state(self, seed=None):
-        """
-        Sets the random seeds that tortoise uses to the current time() and returns that seed so results can be
-        reproduced.
-        """
-        seed = int(time.time()) if seed is None else seed
-        torch.manual_seed(seed)
-        random.seed(seed)
-        # Can't currently set this because of CUBLAS. TODO: potentially enable it if necessary.
-        # torch.use_deterministic_algorithms(True)
-
-        return seed
-        
-    def tts_xla_parallel(self, flags, num_processes=8):
-        """
-        Launches the TTS generation across all TPU cores using xmp.spawn.
-        """
-        print(f"Spawning {num_processes} processes for TPU utilization.")
-        xmp.spawn(run_generation_for_spawn, args=(flags,), nprocs=num_processes)
-                    
-    def generate(self, text, **kwargs):
-        """
-        Alias for .tts() to maintain compatibility with batched generation code.
-        """
-        return self.tts(text, **kwargs)
             
+    def generate(self, text, **kwargs):
+        """
+        Alias for .tts() to maintain compatibility with batched generation code.
+        """
+        return self.tts(text, **kwargs)
+        
     def potentially_redact(self, clip, text):
         if self.enable_redaction:
             return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
