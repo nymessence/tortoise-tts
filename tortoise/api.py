@@ -398,6 +398,9 @@ class TextToSpeech:
         if self.autoregressive_batch_size is not None:
             settings['num_autoregressive_samples'] = self.autoregressive_batch_size
             
+        # FIX: Ensure 'k' (number of candidates) matches the number of samples being generated
+        settings['k'] = settings.get('num_autoregressive_samples', 8)
+        
         return self.tts(text, **settings)
 
     def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
